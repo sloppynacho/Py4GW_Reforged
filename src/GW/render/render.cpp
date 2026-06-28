@@ -1,7 +1,6 @@
 #include "base/error_handling.h"
 
 #include "GW/render/render.h"
-#include "GW/render/render_methods.h"
 
 #include "base/panic.h"
 #include "base/CrashHandler.h"

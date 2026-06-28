@@ -1,7 +1,6 @@
 #include "base/error_handling.h"
 
 #include "GW/game_thread/game_thread.h"
-#include "GW/game_thread/game_thread_methods.h"
 
 #include "base/CrashHandler.h"
 #include "base/hooker.h"

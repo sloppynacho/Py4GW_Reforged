@@ -98,15 +98,30 @@ set(PY4GW_SOURCES
     src/GW/camera/camera_methods.cpp
     src/GW/camera/camera.cpp
     src/GW/context/context.cpp
+    src/GW/context/context_methods.cpp
     src/GW/context/skill.cpp
     src/GW/effects/effects_methods.cpp
     src/GW/effects/effects.cpp
+    src/GW/events/events_methods.cpp
+    src/GW/events/events.cpp
+    src/GW/friend_list/friend_list_methods.cpp
+    src/GW/friend_list/friend_list.cpp
     src/GW/game_thread/game_thread_methods.cpp
     src/GW/game_thread/game_thread.cpp
+    src/GW/guild/guild_methods.cpp
+    src/GW/guild/guild.cpp
+    src/GW/map/map_methods.cpp
+    src/GW/map/map.cpp
+    src/GW/player/player_methods.cpp
+    src/GW/player/player.cpp
+    src/GW/quest/quest_methods.cpp
+    src/GW/quest/quest.cpp
     src/GW/render/render_methods.cpp
     src/GW/render/render.cpp
-    src/GW/ui/ui.cpp
+    src/GW/stoc/stoc_methods.cpp
+    src/GW/stoc/stoc.cpp
     src/GW/ui/ui_methods.cpp
+    src/GW/ui/ui.cpp
     src/base/hooker.cpp
     src/base/patterns.cpp
     src/base/CrashHandler.cpp

@@ -1,7 +1,6 @@
 #include "base/error_handling.h"
 
 #include "GW/camera/camera.h"
-#include "GW/camera/camera_methods.h"
 
 #include "base/CrashHandler.h"
 #include "base/logger.h"
@@ -48,7 +47,7 @@ bool ResolveCameraPointer() {
         return false;
     }
 
-    gw::camera::g_camera = reinterpret_cast<gw::camera::Camera*>(candidate);
+    gw::camera::g_camera = reinterpret_cast<gw::context::Camera*>(candidate);
     return true;
 }
 

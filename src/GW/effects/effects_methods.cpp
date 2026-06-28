@@ -1,6 +1,6 @@
 #include "base/error_handling.h"
 
-#include "GW/effects/effects_methods.h"
+#include "GW/effects/effects.h"
 
 #include "GW/context/context.h"
 #include "GW/context/world_context.h"

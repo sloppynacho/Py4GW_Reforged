@@ -6,6 +6,18 @@
       "mask": "xxxxxxx",
       "offset": "0x7",
       "section": "text"
+    },
+    "gameplay_context_ref": {
+      "assertion_file": "\\Code\\Gw\\Ui\\Game\\GmContext.cpp",
+      "assertion_message": "!s_context",
+      "offset": "-0x9",
+      "section": "text"
+    },
+    "pregame_context_ref": {
+      "assertion_file": "UiPregame.cpp",
+      "assertion_message": "!s_scene",
+      "offset": "0x34",
+      "section": "text"
     }
   }
 }

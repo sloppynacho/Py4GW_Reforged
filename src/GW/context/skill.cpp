@@ -8,6 +8,15 @@
 
 namespace gw::context {
 
+bool Skill::IsUnused() const {
+    for (auto unused_skill_id : gw::constants::unused_skill_ids) {
+        if (unused_skill_id == skill_id) {
+            return true;
+        }
+    }
+    return false;
+}
+
 uint32_t SkillbarSkill::GetRecharge() const {
     if (recharge == 0) {
         return 0;

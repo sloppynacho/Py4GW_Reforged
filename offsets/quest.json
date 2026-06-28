@@ -1,0 +1,18 @@
+{
+  "namespace": "quest",
+  "patterns": {
+    "request_anchor": {
+      "pattern": "\\x85\\xC0\\x75\\x14\\x68\\x6D\\x10\\x00\\x00",
+      "mask": "xxxxxxxxx",
+      "offset": "0",
+      "range": "0xFF",
+      "section": "text"
+    },
+    "request_data_call": {
+      "pattern": "\\xE8\\x00\\x00\\x00\\x00\\x83\\xC4\\x08",
+      "mask": "x????xxx",
+      "offset": "0",
+      "section": "text"
+    }
+  }
+}

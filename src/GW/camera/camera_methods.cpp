@@ -1,29 +1,20 @@
 #include "base/error_handling.h"
 
-#include "GW/camera/camera_methods.h"
-
-#include <cmath>
+#include "GW/camera/camera.h"
 
 namespace gw::camera {
 
-Camera* g_camera = nullptr;
+context::Camera* g_camera = nullptr;
 py4gw::MemoryPatcher g_patch_cam_update = {};
 py4gw::MemoryPatcher g_patch_fog = {};
 std::atomic<bool> g_initialized = false;
 
-float Camera::GetCurrentYaw() const {
-    const Vec3f dir = position - look_at_target;
-    const float curtan = std::atan2(dir.y, dir.x);
-    constexpr float kPi = 3.141592741f;
-    return curtan >= 0.0f ? curtan - kPi : curtan + kPi;
-}
-
-Camera* GetCamera() {
+context::Camera* GetCamera() {
     return g_camera;
 }
 
 bool SetMaxDist(float dist) {
-    Camera* camera = GetCamera();
+    context::Camera* camera = GetCamera();
     if (!camera) {
         return false;
     }
@@ -32,7 +23,7 @@ bool SetMaxDist(float dist) {
 }
 
 bool SetFieldOfView(float fov) {
-    Camera* camera = GetCamera();
+    context::Camera* camera = GetCamera();
     if (!camera) {
         return false;
     }
@@ -53,7 +44,7 @@ bool SetFog(bool flag) {
 }
 
 bool ForwardMovement(float amount, bool true_forward) {
-    Camera* camera = GetCamera();
+    context::Camera* camera = GetCamera();
     if (!camera || amount == 0.0f) {
         return false;
     }
@@ -72,7 +63,7 @@ bool ForwardMovement(float amount, bool true_forward) {
 }
 
 bool VerticalMovement(float amount) {
-    Camera* camera = GetCamera();
+    context::Camera* camera = GetCamera();
     if (!camera) {
         return false;
     }
@@ -82,7 +73,7 @@ bool VerticalMovement(float amount) {
 }
 
 bool SideMovement(float amount) {
-    Camera* camera = GetCamera();
+    context::Camera* camera = GetCamera();
     if (!camera || amount == 0.0f) {
         return false;
     }
@@ -97,7 +88,7 @@ bool RotateMovement(float angle) {
         return false;
     }
 
-    Camera* camera = GetCamera();
+    context::Camera* camera = GetCamera();
     if (!camera) {
         return false;
     }
@@ -118,7 +109,7 @@ bool RotateMovement(float angle) {
 }
 
 Vec3f ComputeCamPos(float dist) {
-    Camera* camera = GetCamera();
+    context::Camera* camera = GetCamera();
     if (!camera) {
         return {};
     }
@@ -138,7 +129,7 @@ Vec3f ComputeCamPos(float dist) {
 }
 
 bool UpdateCameraPos() {
-    Camera* camera = GetCamera();
+    context::Camera* camera = GetCamera();
     if (!camera) {
         return false;
     }
@@ -148,12 +139,12 @@ bool UpdateCameraPos() {
 }
 
 float GetFieldOfView() {
-    Camera* camera = GetCamera();
+    context::Camera* camera = GetCamera();
     return camera ? camera->GetFieldOfView() : 0.0f;
 }
 
 float GetYaw() {
-    Camera* camera = GetCamera();
+    context::Camera* camera = GetCamera();
     return camera ? camera->GetYaw() : 0.0f;
 }
 

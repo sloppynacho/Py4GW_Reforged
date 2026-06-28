@@ -1,8 +1,8 @@
 #include "base/error_handling.h"
 
 #include "base/CrashHandler.h"
-#include "GW/camera/camera_methods.h"
-#include "GW/render/render_methods.h"
+#include "GW/camera/camera.h"
+#include "GW/render/render.h"
 
 #include <cmath>
 
@@ -68,7 +68,7 @@ Mat4x3f* GetTransform(Transform transform) {
 }
 
 float GetFieldOfView() {
-    const camera::Camera* camera = camera::GetCamera();
+    const context::Camera* camera = camera::GetCamera();
     if (!camera) {
         return 0.0f;
     }

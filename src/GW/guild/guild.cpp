@@ -1,0 +1,21 @@
+#include "base/error_handling.h"
+
+#include "GW/guild/guild.h"
+
+namespace gw::guild {
+
+std::atomic<bool> g_initialized = false;
+
+bool Initialize() {
+    if (g_initialized) {
+        return true;
+    }
+    g_initialized = true;
+    return true;
+}
+
+void Shutdown() {
+    g_initialized = false;
+}
+
+}  // namespace gw::guild

@@ -9,8 +9,15 @@
 #include "GW/camera/camera.h"
 #include "GW/context/context.h"
 #include "GW/effects/effects.h"
+#include "GW/events/events.h"
+#include "GW/friend_list/friend_list.h"
 #include "GW/game_thread/game_thread.h"
+#include "GW/guild/guild.h"
+#include "GW/map/map.h"
+#include "GW/player/player.h"
+#include "GW/quest/quest.h"
 #include "GW/render/render.h"
+#include "GW/stoc/stoc.h"
 #include "GW/ui/ui.h"
 
 namespace gw {
@@ -20,10 +27,19 @@ bool Initialize() {
     Logger::Instance().LogInfo("[gw] Initializing game_thread.");
     PY4GW_ASSERT(game_thread::Initialize());
 
+    CrashHandler::SetContext("startup", "stoc", "initialize");
+    Logger::Instance().LogInfo("[gw] Initializing stoc.");
+    if (!stoc::Initialize()) {
+        Logger::Instance().LogError("[gw] stoc initialization failed.");
+        game_thread::Shutdown();
+        return false;
+    }
+
     CrashHandler::SetContext("startup", "render", "initialize");
     Logger::Instance().LogInfo("[gw] Initializing render.");
     if (!render::Initialize()) {
         Logger::Instance().LogError("[gw] render initialization failed.");
+        stoc::Shutdown();
         game_thread::Shutdown();
         return false;
     }
@@ -33,6 +49,7 @@ bool Initialize() {
     if (!ui::Initialize()) {
         Logger::Instance().LogError("[gw] ui initialization failed.");
         render::Shutdown();
+        stoc::Shutdown();
         game_thread::Shutdown();
         return false;
     }
@@ -43,6 +60,7 @@ bool Initialize() {
         Logger::Instance().LogError("[gw] camera initialization failed.");
         ui::Shutdown();
         render::Shutdown();
+        stoc::Shutdown();
         game_thread::Shutdown();
         return false;
     }
@@ -54,6 +72,7 @@ bool Initialize() {
         ui::Shutdown();
         camera::Shutdown();
         render::Shutdown();
+        stoc::Shutdown();
         game_thread::Shutdown();
         return false;
     }
@@ -65,6 +84,7 @@ bool Initialize() {
         ui::Shutdown();
         camera::Shutdown();
         render::Shutdown();
+        stoc::Shutdown();
         game_thread::Shutdown();
         return false;
     }
@@ -77,6 +97,106 @@ bool Initialize() {
         ui::Shutdown();
         camera::Shutdown();
         render::Shutdown();
+        stoc::Shutdown();
+        game_thread::Shutdown();
+        return false;
+    }
+
+    CrashHandler::SetContext("startup", "events", "initialize");
+    Logger::Instance().LogInfo("[gw] Initializing events.");
+    if (!events::Initialize()) {
+        Logger::Instance().LogError("[gw] events initialization failed.");
+        effects::Shutdown();
+        context::Shutdown();
+        ui::Shutdown();
+        camera::Shutdown();
+        render::Shutdown();
+        stoc::Shutdown();
+        game_thread::Shutdown();
+        return false;
+    }
+
+    CrashHandler::SetContext("startup", "friend_list", "initialize");
+    Logger::Instance().LogInfo("[gw] Initializing friend_list.");
+    if (!friend_list::Initialize()) {
+        Logger::Instance().LogError("[gw] friend_list initialization failed.");
+        events::Shutdown();
+        effects::Shutdown();
+        context::Shutdown();
+        ui::Shutdown();
+        camera::Shutdown();
+        render::Shutdown();
+        stoc::Shutdown();
+        game_thread::Shutdown();
+        return false;
+    }
+
+    CrashHandler::SetContext("startup", "player", "initialize");
+    Logger::Instance().LogInfo("[gw] Initializing player.");
+    if (!player::Initialize()) {
+        Logger::Instance().LogError("[gw] player initialization failed.");
+        friend_list::Shutdown();
+        events::Shutdown();
+        effects::Shutdown();
+        context::Shutdown();
+        ui::Shutdown();
+        camera::Shutdown();
+        render::Shutdown();
+        stoc::Shutdown();
+        game_thread::Shutdown();
+        return false;
+    }
+
+    CrashHandler::SetContext("startup", "quest", "initialize");
+    Logger::Instance().LogInfo("[gw] Initializing quest.");
+    if (!quest::Initialize()) {
+        Logger::Instance().LogError("[gw] quest initialization failed.");
+        player::Shutdown();
+        friend_list::Shutdown();
+        events::Shutdown();
+        effects::Shutdown();
+        context::Shutdown();
+        ui::Shutdown();
+        camera::Shutdown();
+        render::Shutdown();
+        stoc::Shutdown();
+        game_thread::Shutdown();
+        return false;
+    }
+
+    CrashHandler::SetContext("startup", "map", "initialize");
+    Logger::Instance().LogInfo("[gw] Initializing map.");
+    if (!map::Initialize()) {
+        Logger::Instance().LogError("[gw] map initialization failed.");
+        quest::Shutdown();
+        player::Shutdown();
+        friend_list::Shutdown();
+        events::Shutdown();
+        effects::Shutdown();
+        context::Shutdown();
+        ui::Shutdown();
+        camera::Shutdown();
+        render::Shutdown();
+        stoc::Shutdown();
+        game_thread::Shutdown();
+        return false;
+    }
+
+    CrashHandler::SetContext("startup", "guild", "initialize");
+    Logger::Instance().LogInfo("[gw] Initializing guild.");
+    if (!guild::Initialize()) {
+        Logger::Instance().LogError("[gw] guild initialization failed.");
+        map::Shutdown();
+        quest::Shutdown();
+        player::Shutdown();
+        friend_list::Shutdown();
+        events::Shutdown();
+        effects::Shutdown();
+        context::Shutdown();
+        ui::Shutdown();
+        camera::Shutdown();
+        render::Shutdown();
+        stoc::Shutdown();
         game_thread::Shutdown();
         return false;
     }
@@ -90,6 +210,24 @@ bool Initialize() {
 }
 
 void Shutdown() {
+    CrashHandler::SetContext("shutdown", "guild", "shutdown");
+    Logger::Instance().LogInfo("[gw] Shutting down guild.");
+    guild::Shutdown();
+    CrashHandler::SetContext("shutdown", "map", "shutdown");
+    Logger::Instance().LogInfo("[gw] Shutting down map.");
+    map::Shutdown();
+    CrashHandler::SetContext("shutdown", "quest", "shutdown");
+    Logger::Instance().LogInfo("[gw] Shutting down quest.");
+    quest::Shutdown();
+    CrashHandler::SetContext("shutdown", "player", "shutdown");
+    Logger::Instance().LogInfo("[gw] Shutting down player.");
+    player::Shutdown();
+    CrashHandler::SetContext("shutdown", "events", "shutdown");
+    Logger::Instance().LogInfo("[gw] Shutting down events.");
+    events::Shutdown();
+    CrashHandler::SetContext("shutdown", "friend_list", "shutdown");
+    Logger::Instance().LogInfo("[gw] Shutting down friend_list.");
+    friend_list::Shutdown();
     CrashHandler::SetContext("shutdown", "effects", "shutdown");
     Logger::Instance().LogInfo("[gw] Shutting down effects.");
     effects::Shutdown();
@@ -99,6 +237,9 @@ void Shutdown() {
     CrashHandler::SetContext("shutdown", "render", "shutdown");
     Logger::Instance().LogInfo("[gw] Shutting down render.");
     render::Shutdown();
+    CrashHandler::SetContext("shutdown", "stoc", "shutdown");
+    Logger::Instance().LogInfo("[gw] Shutting down stoc.");
+    stoc::Shutdown();
     CrashHandler::SetContext("shutdown", "ui", "shutdown");
     Logger::Instance().LogInfo("[gw] Shutting down ui.");
     ui::Shutdown();

@@ -2,7 +2,7 @@
 
 #include "Py4GW.h"
 #include "GW/GuildWars.h"
-#include "GW/render/render_methods.h"
+#include "GW/render/render.h"
 #include "base/CrashHandler.h"
 #include "imgui/imgui_manager.h"
 #include "base/logger.h"

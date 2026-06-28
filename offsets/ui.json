@@ -26,9 +26,99 @@
       "offset": "0x7",
       "section": "text"
     },
+    "get_child_frame_id_anchor": {
+      "assertion_file": "\\Code\\Engine\\Controls\\CtlView.cpp",
+      "assertion_message": "pageId",
+      "line_number": "0",
+      "offset": "0x19",
+      "section": "text"
+    },
+    "find_related_frame": {
+      "pattern": "\\x50\\xFF\\x75\\x0C\\x8D\\x8E\\x28\\x01\\x00\\x00",
+      "mask": "xxxxxxxxxx",
+      "offset": "-0x42",
+      "section": "text"
+    },
+    "get_root_frame": {
+      "pattern": "\\x05\\xD8\\xFE\\xFF\\xFF\\xC3",
+      "mask": "xxxxxx",
+      "offset": "-0x3C",
+      "section": "text"
+    },
+    "send_ui_message": {
+      "pattern": "\\xB9\\x00\\x00\\x00\\x00\\xE8\\x00\\x00\\x00\\x00\\x5D\\xC3\\x89\\x45\\x08",
+      "mask": "x????x????xxxxx",
+      "offset": "0x0",
+      "section": "text"
+    },
+    "load_settings": {
+      "pattern": "\\xE8\\x00\\x00\\x00\\x00\\xFF\\x75\\x0C\\xFF\\x75\\x08\\x6A\\x00",
+      "mask": "x????xxxxxxxx",
+      "offset": "0x0",
+      "section": "text"
+    },
+    "ui_drawn_anchor": {
+      "assertion_file": "\\Code\\Gw\\Ui\\UiRoot.cpp",
+      "assertion_message": "!s_count++",
+      "line_number": "0",
+      "offset": "-0xD",
+      "section": "text"
+    },
+    "shift_screenshot": {
+      "pattern": "\\x75\\x19\\x6A\\x00\\xC7\\x05\\x00\\x00\\x00\\x00\\x01\\x00",
+      "mask": "xxxxxx????xx",
+      "offset": "0x6",
+      "section": "text"
+    },
+    "set_tooltip": {
+      "assertion_file": "\\Code\\Engine\\Frame\\FrTip.cpp",
+      "assertion_message": "CMsg::Validate(id)",
+      "line_number": "0",
+      "offset": "0x0",
+      "section": "text"
+    },
+    "game_settings_addr": {
+      "pattern": "\\x8D\\x4B\\x28\\x89\\x73\\x24\\x8B\\xD7",
+      "mask": "xxxxxxxx",
+      "offset": "0x10",
+      "section": "text"
+    },
+    "set_window_visible": {
+      "pattern": "\\x8B\\x75\\x08\\x83\\xFE\\x00\\x7C\\x19\\x68",
+      "mask": "xxxxx?xxx",
+      "offset": "0x0",
+      "section": "text"
+    },
+    "validate_async_decode": {
+      "pattern": "\\x83\\xC4\\x10\\x3B\\xC6\\x5E\\x74\\x14",
+      "mask": "xxxxxxxx",
+      "offset": "0x0",
+      "section": "text"
+    },
+    "draw_on_compass": {
+      "assertion_file": "\\Code\\Gw\\Char\\CharMsg.cpp",
+      "assertion_message": "knotCount <= arrsize(message.knotData)",
+      "line_number": "0",
+      "offset": "0x0",
+      "section": "text"
+    },
     "create_ui_component": {
       "pattern": "\\x33\\xD2\\x89\\x45\\x08\\xB9\\xC8\\x01\\x00\\x00",
       "mask": "xxxxxxxxxx",
+      "offset": "0x0",
+      "section": "text"
+    },
+    "destroy_ui_component": {
+      "assertion_file": "\\Code\\Gw\\Ui\\Frame\\FrApi.cpp",
+      "assertion_message": "frame->state.Test(FRAME_STATE_CREATED)",
+      "line_number": "0",
+      "offset": "0x0",
+      "section": "text"
+    },
+    "typed_component_passthrough": {
+      "assertion_file": "FrApi.cpp",
+      "assertion_message": "params->inputMask < FrameMarginsParams::INPUT_ILLEGAL_BIT_FIRST",
+      "line_number": "0",
       "offset": "0x0",
       "section": "text"
     },
@@ -51,17 +141,17 @@
       "offset": "0x0",
       "section": "text"
     },
-    "scrollable_frame_callback": {
-      "pattern": "\\x81\\xE1\\x00\\x00\\xF8\\xFF",
-      "mask": "xxxxxx",
-      "offset": "-0x4",
-      "section": "text"
-    },
     "text_label_frame_callback": {
       "assertion_file": "CtlText.cpp",
       "assertion_message": "FrameTestStyles(hdr.frameId, CTLTEXT_STYLE_MODEL)",
       "line_number": "0",
       "offset": "0x0",
+      "section": "text"
+    },
+    "scrollable_frame_callback": {
+      "pattern": "\\x81\\xE1\\x00\\x00\\xF8\\xFF",
+      "mask": "xxxxxx",
+      "offset": "-0x4",
       "section": "text"
     },
     "frame_list_callback": {
@@ -112,49 +202,52 @@
       "offset": "0x0",
       "section": "text"
     },
-    "frame_new_subclass": {
-      "pattern": "\\x8D\\xB8\\xA8\\x00\\x00\\x00\\x8B\\xCF",
-      "mask": "xxxxxxxx",
-      "offset": "-0x2D",
+    "preferences_initialized": {
+      "assertion_file": "\\Code\\Gw\\Pref\\PrApi.cpp",
+      "assertion_message": "location < arrsize(s_flushDelay)",
+      "line_number": "0",
+      "offset": "-0x17",
       "section": "text"
     },
-    "destroy_ui_component": {
-      "assertion_file": "\\Code\\Gw\\Ui\\Frame\\FrApi.cpp",
-      "assertion_message": "frame->state.Test(FRAME_STATE_CREATED)",
+    "enum_preference_info": {
+      "assertion_file": "\\Code\\Gw\\Pref\\PrConst.cpp",
+      "assertion_message": "pref < arrsize(s_enumInfo)",
+      "line_number": "0",
+      "offset": "0x15",
+      "section": "text"
+    },
+    "number_preference_info": {
+      "assertion_file": "\\Code\\Gw\\Pref\\PrConst.cpp",
+      "assertion_message": "pref < arrsize(s_valueInfo)",
+      "line_number": "0",
+      "offset": "0x15",
+      "section": "text"
+    },
+    "set_string_preference": {
+      "assertion_file": "\\Code\\Gw\\Ui\\Game\\CharCreate\\CharCreate.cpp",
+      "assertion_message": "msg.summaryBytes <= NET_CHARACTER_SUMMARY_MAX",
+      "line_number": "0",
+      "offset": "-0x82",
+      "section": "text"
+    },
+    "preference_quality_anchor": {
+      "assertion_file": "\\Code\\Gw\\Ui\\Dialog\\DlgOptGr.cpp",
+      "assertion_message": "No valid case for switch variable 'quality'",
       "line_number": "0",
       "offset": "0x0",
       "section": "text"
     },
-    "game_settings_addr": {
-      "pattern": "\\x8D\\x4B\\x28\\x89\\x73\\x24\\x8B\\xD7",
-      "mask": "xxxxxxxx",
-      "offset": "0x10",
-      "section": "text"
-    },
-    "set_window_visible": {
-      "pattern": "\\x8B\\x75\\x08\\x83\\xFE\\x00\\x7C\\x19\\x68",
-      "mask": "xxxxx?xxx",
-      "offset": "0x0",
-      "section": "text"
-    },
-    "draw_on_compass": {
-      "assertion_file": "\\Code\\Gw\\Char\\CharMsg.cpp",
-      "assertion_message": "knotCount <= arrsize(message.knotData)",
+    "set_in_game_shadow_quality": {
+      "assertion_file": "AvShadow.cpp",
+      "assertion_message": "No valid case for switch variable 'value'",
       "line_number": "0",
       "offset": "0x0",
       "section": "text"
     },
-    "load_settings": {
-      "pattern": "\\xE8\\x00\\x00\\x00\\x00\\xFF\\x75\\x0C\\xFF\\x75\\x08\\x6A\\x00",
-      "mask": "x????xxxxxxxx",
-      "offset": "0x0",
-      "section": "text"
-    },
-    "set_tooltip": {
-      "assertion_file": "\\Code\\Engine\\Frame\\FrTip.cpp",
-      "assertion_message": "CMsg::Validate(id)",
-      "line_number": "0",
-      "offset": "0x0",
+    "set_in_game_ui_scale": {
+      "pattern": "\\x83\\xC4\\x1C\\x81\\xFE\\x20\\x03\\x00\\x00",
+      "mask": "xxxxxxxxx",
+      "offset": "0x49",
       "section": "text"
     },
     "set_volume": {
@@ -169,42 +262,36 @@
       "offset": "0x0",
       "section": "text"
     },
-    "get_child_frame_id_anchor": {
-      "assertion_file": "\\Code\\Engine\\Controls\\CtlView.cpp",
-      "assertion_message": "pageId",
-      "line_number": "0",
-      "offset": "0x19",
-      "section": "text"
-    },
-    "find_related_frame": {
-      "pattern": "\\x50\\xFF\\x75\\x0C\\x8D\\x8E\\x28\\x01\\x00\\x00",
-      "mask": "xxxxxxxxxx",
-      "offset": "-0x42",
-      "section": "text"
-    },
-    "get_root_frame": {
-      "pattern": "\\x05\\xD8\\xFE\\xFF\\xFF\\xC3",
+    "get_graphics_renderer_value": {
+      "pattern": "\\x74\\x12\\x6A\\x16\\x6A\\x00",
       "mask": "xxxxxx",
-      "offset": "-0x3C",
+      "offset": "0x6",
       "section": "text"
     },
-    "send_ui_message": {
-      "pattern": "\\xB9\\x00\\x00\\x00\\x00\\xE8\\x00\\x00\\x00\\x00\\x5D\\xC3\\x89\\x45\\x08",
-      "mask": "x????x????xxxxx",
+    "set_graphics_renderer_value": {
+      "pattern": "\\x8D\\x47\\xE9\\xF7",
+      "mask": "xxxx",
       "offset": "0x0",
       "section": "text"
     },
-    "ui_drawn_anchor": {
-      "assertion_file": "\\Code\\Gw\\Ui\\UiRoot.cpp",
-      "assertion_message": "!s_count++",
+    "set_game_renderer_mode": {
+      "assertion_file": "\\Code\\Gw\\Ui\\Dialog\\DlgOptGr.cpp",
+      "assertion_message": "multiSampleIndex != CTL_DROPLIST_INDEX_NULL",
       "line_number": "0",
-      "offset": "-0xD",
+      "offset": "-0x37",
       "section": "text"
     },
-    "shift_screenshot": {
-      "pattern": "\\x75\\x19\\x6A\\x00\\xC7\\x05\\x00\\x00\\x00\\x00\\x01\\x00",
-      "mask": "xxxxxx????xx",
-      "offset": "0x6",
+    "game_renderer_metrics": {
+      "pattern": "\\x83\\xC4\\x1C\\x81\\xFE\\x20\\x03\\x00\\x00",
+      "mask": "xxxxxxxxx",
+      "offset": "0x0",
+      "section": "text"
+    },
+    "command_line_number": {
+      "assertion_file": "\\Code\\Gw\\Param\\Param.cpp",
+      "assertion_message": "value - PARAM_VALUE_FIRST < (sizeof(s_values) / sizeof((s_values)[0]))",
+      "line_number": "0",
+      "offset": "0x0",
       "section": "text"
     }
   }

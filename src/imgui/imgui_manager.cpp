@@ -2,7 +2,7 @@
 
 #include "imgui/imgui_manager.h"
 
-#include "GW/render/render_methods.h"
+#include "GW/render/render.h"
 #include "base/process_manager.h"
 #include "base/python_runtime.h"
 #include "base/logger.h"

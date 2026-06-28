@@ -26,6 +26,9 @@ CMakeFiles/
 *.idb
 *.exp
 *.pdb
+*.db
+*.db-shm
+*.db-wal
 
 # Python cache
 __pycache__/

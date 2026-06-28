@@ -1,0 +1,11 @@
+{
+  "namespace": "events",
+  "patterns": {
+    "send_event_message_callsite": {
+      "pattern": "\\x68\\x08\\x08\\x00\\x00\\x8D\\x85\\xF4\\xF7\\xFF\\xFF",
+      "mask": "xxxxxxxxxxx",
+      "offset": "0x16",
+      "section": "text"
+    }
+  }
+}

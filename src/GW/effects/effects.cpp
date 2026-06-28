@@ -1,7 +1,6 @@
 #include "base/error_handling.h"
 
 #include "GW/effects/effects.h"
-#include "GW/effects/effects_methods.h"
 
 #include "base/CrashHandler.h"
 #include "base/hooker.h"

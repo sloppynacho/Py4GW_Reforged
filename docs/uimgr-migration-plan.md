@@ -8,7 +8,7 @@ Scope rules:
 
 - migrate native `uimgr` functionality only
 - do not migrate `py_ui.cpp`, `pybind11`, or any Python-shaped accessor surface
-- `*_methods.h/.cpp` are for callable methods only
+- `*_methods.cpp` is for callable method bodies only; declarations stay in the owning `.h`
 - hook ownership, detours, enable or disable flow, and teardown stay in `ui.cpp` or another dedicated non-`methods` file
 - if a native legacy function cannot be ported safely now, copy the native logic and leave it commented with a short blocker note
 
@@ -37,8 +37,6 @@ Current migrated files:
 - [include/GW/ui/ui_module.h](/C:/Users/Apo/Py4GW_Reforged/include/GW/ui/ui_module.h:1)
 - [include/GW/ui/ui_hooks.h](/C:/Users/Apo/Py4GW_Reforged/include/GW/ui/ui_hooks.h:1)
 - [include/GW/ui/ui_core.h](/C:/Users/Apo/Py4GW_Reforged/include/GW/ui/ui_core.h:1)
-- [include/GW/ui/ui_frame_methods.h](/C:/Users/Apo/Py4GW_Reforged/include/GW/ui/ui_frame_methods.h:1)
-- [include/GW/ui/ui_control_methods.h](/C:/Users/Apo/Py4GW_Reforged/include/GW/ui/ui_control_methods.h:1)
 - [include/GW/ui/ui_deferred_preferences.h](/C:/Users/Apo/Py4GW_Reforged/include/GW/ui/ui_deferred_preferences.h:1)
 - [src/GW/ui/ui.cpp](/C:/Users/Apo/Py4GW_Reforged/src/GW/ui/ui.cpp:1)
 - [src/GW/ui/ui_callbacks.cpp](/C:/Users/Apo/Py4GW_Reforged/src/GW/ui/ui_callbacks.cpp:1)
@@ -77,7 +75,7 @@ The current split is:
   - detour ownership
   - hook enable and disable flow
   - shutdown draining and callback-state clearing
-- `ui_frame_methods.*`
+- `ui_frame_methods.cpp`
   - frame lookup
   - hierarchy traversal
   - frame state reads and writes
@@ -89,7 +87,7 @@ The current split is:
   - settings load and settings blob access
   - tooltip access
   - audio volume helpers
-- `ui_control_methods.*`
+- `ui_control_methods.cpp`
   - raw UI dispatch
   - frame-targeted UI dispatch
   - component creation and destruction methods
@@ -191,7 +189,7 @@ Completed:
 
 Implemented in:
 
-- `include/GW/ui/ui_frame_methods.h`
+- `include/GW/ui/ui.h`
 - `src/GW/ui/ui_frame_methods.cpp`
 
 Constraints preserved:

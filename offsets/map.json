@@ -1,0 +1,53 @@
+{
+  "namespace": "map",
+  "patterns": {
+    "skip_cinematic": {
+      "pattern": "\\x8B\\x40\\x30\\x83\\x78\\x04\\x00",
+      "mask": "xxxxxxx",
+      "offset": "-0x5",
+      "section": "text"
+    },
+    "region_id_ref": {
+      "pattern": "\\x6A\\x54\\x8D\\x46\\x24\\x89\\x08",
+      "mask": "xxxxxxx",
+      "offset": "-0x4",
+      "section": "text"
+    },
+    "area_info_ref": {
+      "pattern": "\\x6B\\xC6\\x7C\\x5E\\x05",
+      "mask": "xxxxx",
+      "offset": "0x5",
+      "section": "text"
+    },
+    "instance_info_ref": {
+      "pattern": "\\x6A\\x2C\\x50\\xE8\\x00\\x00\\x00\\x00\\x83\\xC4\\x08\\xC7",
+      "mask": "xxxx????xxxx",
+      "offset": "0x0D",
+      "section": "text"
+    },
+    "query_altitude_callsite": {
+      "pattern": "\\xD9\\x06\\x8D\\x45\\xC8\\x83\\xC4\\x10",
+      "mask": "xxxxxxxx",
+      "offset": "-0x5",
+      "section": "text"
+    },
+    "bypass_tolerance_patch": {
+      "pattern": "\\x74\\x1D\\x68\\xA9\\x01\\x00\\x00",
+      "mask": "xxxxxxx",
+      "offset": "0",
+      "section": "text"
+    },
+    "enter_challenge_anchor": {
+      "pattern": "\\xA9\\x00\\x00\\x10\\x00\\x74\\x24",
+      "mask": "xxxxxxx",
+      "offset": "0",
+      "section": "text"
+    },
+    "map_type_instance_infos_ref": {
+      "pattern": "\\x83\\xC0\\x0C\\x41\\x3D\\x00\\x00\\x00\\x00",
+      "mask": "xxxxx??xx",
+      "offset": "0",
+      "section": "text"
+    }
+  }
+}
