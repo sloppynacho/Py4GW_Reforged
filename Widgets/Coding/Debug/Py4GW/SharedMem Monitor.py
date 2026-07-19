@@ -280,7 +280,7 @@ class FactionNode:
                     PyImGui.ImGuiCol.PlotHistogram,
                     ColorPalette.GetColor("midnight_violet").to_tuple_normalized(),
                 )
-                PyImGui.progress_bar(progress, avail_width, f"{self.current:,}/{self.max:,}")
+                PyImGui.progress_bar(progress, avail_width, 0, f"{self.current:,}/{self.max:,}")
                 PyImGui.pop_style_color(1)
                 PyImGui.end_table()
 
@@ -404,7 +404,7 @@ class TitleData:
             label_text = f"{title.CurrentPoints:,} / MAX"
             
         PyImGui.push_style_color(PyImGui.ImGuiCol.PlotHistogram, ColorPalette.GetColor("midnight_violet").to_tuple_normalized())
-        PyImGui.progress_bar(progress, avail_width, label_text)
+        PyImGui.progress_bar(progress, avail_width, 0, label_text)
         PyImGui.pop_style_color(1)
         PyImGui.separator()
 
@@ -787,7 +787,7 @@ class ExperienceData:
             PyImGui.table_next_column()
             avail_width = PyImGui.get_content_region_avail()[0]
             PyImGui.push_style_color(PyImGui.ImGuiCol.PlotHistogram, ColorPalette.GetColor("dark_green").to_tuple_normalized())
-            PyImGui.progress_bar(self.progress_pct / 100.0, avail_width, f"{self.experience:,} xp")
+            PyImGui.progress_bar(self.progress_pct / 100.0, avail_width, 0, f"{self.experience:,} xp")
             PyImGui.pop_style_color(1)
             
             PyImGui.end_table()     
@@ -839,7 +839,7 @@ class HealthData:
             bar_start_pos = PyImGui.get_cursor_pos() 
             avail_width = PyImGui.get_content_region_avail()[0] 
             PyImGui.push_style_color( PyImGui.ImGuiCol.PlotHistogram, _get_health_color() ) 
-            PyImGui.progress_bar(self.Health, avail_width, caption) 
+            PyImGui.progress_bar(self.Health, avail_width, 0, caption)
             PyImGui.pop_style_color(1)
             bar_height = 20
             cur_x, cur_y = bar_start_pos

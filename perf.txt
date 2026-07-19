@@ -1,0 +1,41 @@
+[2026-07-18 11:46:05] [print:] === System Monitor: Usage Snapshot ===
+[2026-07-18 11:46:05] [print:] Filter='' IncludedPhases=Draw,Main,Update Rows=43 Printed=15 IncludedAvgTotal=4.597ms
+[2026-07-18 11:46:05] [print:] [Mission Map +.py] total_avg=1.170ms draw=1.168ms main=0.003ms update=0.000ms members=2
+[2026-07-18 11:46:05] [print:] subjects=Mission Map +.py
+[2026-07-18 11:46:05] [print:] scripts=Guild Wars\Screen Overlays/Mission Map +.py
+[2026-07-18 11:46:05] [print:] [WidgetManager] total_avg=1.166ms draw=1.160ms main=0.000ms update=0.006ms members=2
+[2026-07-18 11:46:05] [print:] subjects=Draw, Update
+[2026-07-18 11:46:05] [print:] [Widget Profiler.py] total_avg=0.382ms draw=0.350ms main=0.000ms update=0.032ms members=2
+[2026-07-18 11:46:05] [print:] subjects=Widget Profiler.py
+[2026-07-18 11:46:05] [print:] scripts=Coding\Debug\Py4GW/Widget Profiler.py
+[2026-07-18 11:46:05] [print:] [HeroAI.py] total_avg=0.382ms draw=0.000ms main=0.382ms update=0.000ms members=1
+[2026-07-18 11:46:05] [print:] subjects=HeroAI.py
+[2026-07-18 11:46:05] [print:] scripts=Automation\Multiboxing/HeroAI.py
+[2026-07-18 11:46:05] [print:] [System Monitor.py] total_avg=0.360ms draw=0.336ms main=0.000ms update=0.024ms members=2
+[2026-07-18 11:46:05] [print:] subjects=System Monitor.py
+[2026-07-18 11:46:05] [print:] scripts=Coding\Debug\Py4GW/System Monitor.py
+[2026-07-18 11:46:05] [print:] [SharedMemory] total_avg=0.299ms draw=0.299ms main=0.000ms update=0.000ms members=1
+[2026-07-18 11:46:05] [print:] subjects=SharedMemory
+[2026-07-18 11:46:05] [print:] [Tick] total_avg=0.136ms draw=0.136ms main=0.000ms update=0.000ms members=1
+[2026-07-18 11:46:05] [print:] subjects=Interrupt
+[2026-07-18 11:46:05] [print:] [InventoryPlus.py] total_avg=0.117ms draw=0.000ms main=0.117ms update=0.000ms members=1
+[2026-07-18 11:46:05] [print:] subjects=InventoryPlus.py
+[2026-07-18 11:46:05] [print:] scripts=Guild Wars\Items & Loot/InventoryPlus.py
+[2026-07-18 11:46:05] [print:] [Switch Character.py] total_avg=0.109ms draw=0.000ms main=0.109ms update=0.000ms members=1
+[2026-07-18 11:46:05] [print:] subjects=Switch Character.py
+[2026-07-18 11:46:05] [print:] scripts=Guild Wars/Switch Character.py
+[2026-07-18 11:46:05] [print:] [Travel.py] total_avg=0.062ms draw=0.000ms main=0.062ms update=0.000ms members=1
+[2026-07-18 11:46:05] [print:] subjects=Travel.py
+[2026-07-18 11:46:05] [print:] scripts=Guild Wars/Travel.py
+[2026-07-18 11:46:05] [print:] [ServerRegion] total_avg=0.049ms draw=0.049ms main=0.000ms update=0.000ms members=1
+[2026-07-18 11:46:05] [print:] subjects=ServerRegion
+[2026-07-18 11:46:05] [print:] [Environment Upkeeper.py] total_avg=0.048ms draw=0.000ms main=0.048ms update=0.000ms members=1
+[2026-07-18 11:46:05] [print:] subjects=Environment Upkeeper.py
+[2026-07-18 11:46:05] [print:] scripts=System/Environment Upkeeper.py
+[2026-07-18 11:46:05] [print:] [TextParser] total_avg=0.041ms draw=0.041ms main=0.000ms update=0.000ms members=1
+[2026-07-18 11:46:05] [print:] subjects=TextParser
+[2026-07-18 11:46:05] [print:] [Enemy Tracker.py] total_avg=0.037ms draw=0.000ms main=0.037ms update=0.000ms members=1
+[2026-07-18 11:46:05] [print:] subjects=Enemy Tracker.py
+[2026-07-18 11:46:05] [print:] scripts=System/Enemy Tracker.py
+[2026-07-18 11:46:05] [print:] [SystemSharedMemory] total_avg=0.035ms draw=0.035ms main=0.000ms update=0.000ms members=1
+[2026-07-18 11:46:05] [print:] subjects=SystemSharedMemory

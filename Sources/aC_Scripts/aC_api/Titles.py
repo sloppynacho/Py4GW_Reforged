@@ -105,7 +105,7 @@ def display_title_progress(title_name, title_id, tiers):
     avail_width, _ = PyImGui.get_content_region_avail()
     start_x, start_y = PyImGui.get_cursor_pos()
 
-    PyImGui.progress_bar(fraction, avail_width, " ")
+    PyImGui.progress_bar(fraction, avail_width, 0, " ")
 
     PyImGui.push_style_color(PyImGui.ImGuiCol.Text, heading_gray)
     tw, th = PyImGui.calc_text_size(overlay)
@@ -172,7 +172,7 @@ def display_faction(title_name, title_id, get_data_func, tier_list):
     avail_width, _ = PyImGui.get_content_region_avail()
     start_x, start_y = PyImGui.get_cursor_pos()
 
-    PyImGui.progress_bar(rep_fraction, avail_width, " ") # " " to remove all text, "" would result in "xx.x %" on the bar 
+    PyImGui.progress_bar(rep_fraction, avail_width, 0, " ") # " " to remove all text, "" would result in "xx.x %" on the bar
 
     # Center overlay text on the progress bar
     PyImGui.push_style_color(PyImGui.ImGuiCol.Text, heading_gray)
@@ -207,7 +207,7 @@ def display_faction(title_name, title_id, get_data_func, tier_list):
 
     avail_width2, _ = PyImGui.get_content_region_avail()
     start_x2, start_y2 = PyImGui.get_cursor_pos()
-    PyImGui.progress_bar(unspent_fraction, avail_width2, " ")
+    PyImGui.progress_bar(unspent_fraction, avail_width2, 0, " ")
 
     # Center overlay text manually
     PyImGui.push_style_color(PyImGui.ImGuiCol.Text, heading_gray)

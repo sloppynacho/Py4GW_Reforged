@@ -102,7 +102,7 @@ class TitleData:
             label_text = f"{title.current_points:,} / MAX"
 
         PyImGui.push_style_color(PyImGui.ImGuiCol.PlotHistogram, ColorPalette.GetColor("midnight_violet").to_tuple_normalized())
-        PyImGui.progress_bar(progress, avail_width, label_text)
+        PyImGui.progress_bar(progress, avail_width, 0, label_text)
         PyImGui.pop_style_color(1)
         PyImGui.separator()
 

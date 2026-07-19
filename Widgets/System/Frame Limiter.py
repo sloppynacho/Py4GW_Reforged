@@ -1,7 +1,7 @@
 from Py4GWCoreLib import Routines, EnumPreference, FrameLimiter, ThrottledTimer, UIManager, Color, ColorPalette, ImGui_Legacy
 import PyImGui
 
-update_timer = ThrottledTimer(1000)  # 1 second timer
+update_timer = ThrottledTimer(5000)  # 1 second timer
 OPTIONAL = False
 
 MODULE_NAME = "Frame Limiter"

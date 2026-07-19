@@ -457,7 +457,7 @@ class HeroAI_RichPlayerPanelRenderer:
                 pip_pos = text_rect[0] - 5 - pip_size[0]
                 for i in range(abs(int(pips))):
                     pip_texture.value.get_texture().draw_in_drawlist((pip_pos - (i * pip_step), pip_y), pip_size)
-            PyImGui.draw_list_add_rect(item_rect_min[0], item_rect_min[1], item_rect_min[0] + item_rect_size[0], item_rect_min[1] + item_rect_size[1], style.Border.color_int, 0, 1)
+            PyImGui.draw_list_add_rect(item_rect_min[0], item_rect_min[1], item_rect_min[0] + item_rect_size[0], item_rect_min[1] + item_rect_size[1], style.Border.color_int, 0, 0, 1)
         else:
             pip_char = IconsFontAwesome5.ICON_ANGLE_RIGHT if pips > 0 else IconsFontAwesome5.ICON_ANGLE_LEFT
             pip_string = "".join([pip_char for _ in range(abs(int(pips)))])
@@ -533,7 +533,7 @@ class HeroAI_RichPlayerPanelRenderer:
                 pip_pos = text_rect[0] - 5 - pip_size[0]
                 for i in range(abs(int(pips))):
                     pip_texture.value.get_texture().draw_in_drawlist((pip_pos - (i * pip_step), pip_y), pip_size)
-            PyImGui.draw_list_add_rect(item_rect_min[0], item_rect_min[1], item_rect_min[0] + item_rect_size[0], item_rect_min[1] + item_rect_size[1], style.Border.color_int, 0, 1)
+            PyImGui.draw_list_add_rect(item_rect_min[0], item_rect_min[1], item_rect_min[0] + item_rect_size[0], item_rect_min[1] + item_rect_size[1], style.Border.color_int, 0, 0, 1)
         else:
             pip_char = IconsFontAwesome5.ICON_ANGLE_RIGHT if pips > 0 else IconsFontAwesome5.ICON_ANGLE_LEFT
             pip_string = "".join([pip_char for _ in range(abs(int(pips)))])
@@ -667,7 +667,7 @@ class HeroAI_RichPlayerPanelRenderer:
             else:
                 ImGui_Legacy.dummy(skill_size, skill_size)
                 item_rect_min = PyImGui.get_item_rect_min()
-                PyImGui.draw_list_add_rect(item_rect_min[0], item_rect_min[1], item_rect_min[0] + skill_size, item_rect_min[1] + skill_size, Color(50, 50, 50, 255).color_int, 0, 2)
+                PyImGui.draw_list_add_rect(item_rect_min[0], item_rect_min[1], item_rect_min[0] + skill_size, item_rect_min[1] + skill_size, Color(50, 50, 50, 255).color_int, 0, 0, 2)
                 if slot < NUMBER_OF_SKILLS - 1:
                     PyImGui.same_line(0, 0)
                 continue

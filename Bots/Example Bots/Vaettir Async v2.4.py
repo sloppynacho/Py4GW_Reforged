@@ -2125,7 +2125,7 @@ def DrawWindow():
 
 
                 PyImGui.text(f"Current Step: {macro_step_name}")
-                PyImGui.progress_bar(current_step_progress/outpost_handling_target, -1, bar_name)
+                PyImGui.progress_bar(current_step_progress/outpost_handling_target, -1, 0, bar_name)
 
                 #bot_vars.show_visual_path = PyImGui.checkbox("Show Visual Path", bot_vars.show_visual_path)
                 bot_vars.show_visual_path = False

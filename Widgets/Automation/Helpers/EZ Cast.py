@@ -449,7 +449,7 @@ class NodeEnergy(dNodes.Node):
 
     def draw_body(self):
         global cache
-        PyImGui.progress_bar(cache.e_percent, -1, f"energy {cache.energy: .1f}")
+        PyImGui.progress_bar(cache.e_percent, -1, 0, f"energy {cache.energy: .1f}")
 
     def execute(self):
         global cache

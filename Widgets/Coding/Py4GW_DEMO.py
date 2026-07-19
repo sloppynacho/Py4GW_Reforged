@@ -2337,7 +2337,7 @@ def ShowPyImGuiMiscelaneousWindow():
             ImGui_misc_window_state.values[2] += 0.01  # Increment the progress by a small amount
             if ImGui_misc_window_state.values[2] > 1.0:  # If progress exceeds 1.0 (100%), reset to 0.0
                 ImGui_misc_window_state.values[2] = 0.0
-            PyImGui.progress_bar(ImGui_misc_window_state.values[2], 100.0, "Progress Bar") 
+            PyImGui.progress_bar(ImGui_misc_window_state.values[2], 100.0, 0, "Progress Bar")
 
             # Tooltip
             PyImGui.text("Hover over the button to see a tooltip:")

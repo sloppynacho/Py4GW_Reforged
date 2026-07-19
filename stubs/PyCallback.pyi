@@ -18,10 +18,10 @@ class PyCallback:
     @staticmethod
     def Register(
         name: str,
+        phase: int,
         fn: Callable[[], Any],
-        phase: Phase,
         priority: int = 99,
-        context: Context = Context.Draw,
+        context: int = Context.Draw,
     ) -> int: ...
 
     @staticmethod

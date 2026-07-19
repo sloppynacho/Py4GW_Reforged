@@ -55,7 +55,7 @@ class ExperienceData:
             PyImGui.table_next_column()
             avail_width = PyImGui.get_content_region_avail()[0]
             PyImGui.push_style_color(PyImGui.ImGuiCol.PlotHistogram, ColorPalette.GetColor("dark_green").to_tuple_normalized())
-            PyImGui.progress_bar(self.progress_pct / 100.0, avail_width, f"{self.experience:,} xp")
+            PyImGui.progress_bar(self.progress_pct / 100.0, avail_width, 0, f"{self.experience:,} xp")
             PyImGui.pop_style_color(1)
             
             PyImGui.end_table()     

@@ -18,6 +18,7 @@ import os
 from Py4GWCoreLib.py4gwcorelib_src.Settings import Settings
 from Py4GWCoreLib.py4gwcorelib_src.WidgetManager import WidgetHandler
 from Py4GWCoreLib.py4gwcorelib_src.WidgetManager import get_widget_handler
+from Py4GWCoreLib.py4gwcorelib_src.launch_bar.launchpad import register_launchpad_once
 
 MODULE_NAME = "Widget Manager"
 
@@ -64,30 +65,21 @@ def _bootstrap_once() -> None:
         _log("bootstrap error (will retry): %s" % exc)
 
 
-def _draw_launchpad() -> None:
-    """Render the launchpad (the widget-manager UI) each frame — hosted here, always on."""
-
-    try:
-        import LaunchBar
-
-        LaunchBar.main()
-    except Exception as exc:
-        _log("launchpad render error: %s" % exc)
-
-
 def update():
     return  # widgets run via C++ callbacks; nothing on the update loop here
 
 
 def draw():
-    return  # rendering happens in main() (ExecuteDraw calls both draw() and main())
+    return  # nothing here; the launchpad renders via its own registered Draw callback
 
 
 def main():
-    """Called every draw frame by the widget host: bootstrap once, then render the launchpad."""
+    """Called every draw frame by the widget host. Now only lifecycle: register the launchpad
+    callback once and run the settings/discovery bootstrap once. The launchpad itself renders
+    through its own Draw callback, so this host's steady-state per-frame cost is ~nil."""
 
+    register_launchpad_once()
     _bootstrap_once()
-    _draw_launchpad()
 
 
 if __name__ == "__main__":

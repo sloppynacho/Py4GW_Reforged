@@ -140,6 +140,7 @@ class ProfilingRegistry:
     enabled: bool
     timings: dict[str, dict[str, int]]
     cprofile_targets: dict[str, cProfile.Profile]
+    registered: set[str]  # base names whose runner wraps them via runcall_scope/scope
 
     def __new__(cls):
         if cls._instance is None:
@@ -147,7 +148,22 @@ class ProfilingRegistry:
             cls._instance.enabled = False
             cls._instance.timings = {}
             cls._instance.cprofile_targets = {}
+            cls._instance.registered = set()
         return cls._instance
+
+    # ── profilability registry ──
+    # A name is profilable only if whatever runs it wraps the call in
+    # runcall_scope/scope. Callers declare that here so consumers (e.g. the
+    # System Monitor) can tell, ahead of time, which entries can be deep-profiled
+    # -- without assuming they are widgets.
+    def register(self, name: str) -> None:
+        self.registered.add(name)
+
+    def unregister(self, name: str) -> None:
+        self.registered.discard(name)
+
+    def is_registered(self, name: str) -> bool:
+        return name in self.registered
 
     def scope(self, category: str, name: str) -> ProfileScope:
         return ProfileScope(

@@ -56,7 +56,7 @@ class FactionNode:
                     PyImGui.ImGuiCol.PlotHistogram,
                     ColorPalette.GetColor("midnight_violet").to_tuple_normalized(),
                 )
-                PyImGui.progress_bar(progress, avail_width, f"{self.current:,}/{self.max:,}")
+                PyImGui.progress_bar(progress, avail_width, 0, f"{self.current:,}/{self.max:,}")
                 PyImGui.pop_style_color(1)
                 PyImGui.end_table()
 

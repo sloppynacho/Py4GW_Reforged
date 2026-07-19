@@ -66,6 +66,10 @@ class LaunchBarManager:
         self.assign_search = ""              # search text in the widget/function picker
         self.icon_search = ""                # search text in the Font Awesome icon picker
         self._icon_cache = None              # cached (name, glyph) list for the icon picker
+        # Preset bars (Active/Favorites) re-derive their tiles from the live widget set every
+        # frame; cache a per-bar signature so the sort + per-item Tile reallocation is skipped
+        # on the (almost every) frame where nothing changed.
+        self._preset_sigs: dict[str, tuple] = {}
         for bar in bar_set.bars:
             self._ensure_host(bar)
 
@@ -138,10 +142,19 @@ class LaunchBarManager:
         return sorted(picked, key=lambda m: (m.name or m.id).lower())
 
     def _sync_preset_bar(self, bar) -> None:
-        """Rebuild a preset bar's tiles row-major from its live source (compact packing)."""
+        """Rebuild a preset bar's tiles row-major from its live source (compact packing).
+
+        Memoized: this runs every frame, but the sort + per-item Tile reallocation is
+        skipped whenever the source items and column count are unchanged since last frame.
+        """
 
         items = self._preset_items(bar.source)
         cols = max(1, bar.columns)
+        sig = (cols, tuple((m.id, m.name) for m in items))
+        if self._preset_sigs.get(bar.id) == sig:
+            return
+        self._preset_sigs[bar.id] = sig
+
         bar.rows = max(1, math.ceil(len(items) / cols)) if items else 1
         bar.tiles = [
             Tile(id="a%d" % i, col=i % cols, row=i // cols, w=1, h=1, name=m.name, widget_id=m.id, deletable=False)

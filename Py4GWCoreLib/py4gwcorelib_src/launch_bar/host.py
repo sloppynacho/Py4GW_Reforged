@@ -37,9 +37,19 @@ _ACTION_TOOLTIP = {"browser": "Widget browser"}
 
 
 # ---- color helpers (operate on '#rrggbb') ---------------------------------------------
+# Colors here are static strings reconverted every frame per bar/tile; cache the parse
+# (and the lighten) by input so each unique value is computed once, not 60x/second.
+_PARSE_HEX_CACHE: dict[str, tuple[int, int, int]] = {}
+_LIGHTEN_CACHE: dict[tuple[str, float], str] = {}
+
+
 def _parse_hex(value: str) -> tuple[int, int, int]:
-    h = value.lstrip("#")
-    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    cached = _PARSE_HEX_CACHE.get(value)
+    if cached is None:
+        h = value.lstrip("#")
+        cached = (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+        _PARSE_HEX_CACHE[value] = cached
+    return cached
 
 
 def _hex_rgba01(value: str, alpha: float = 1.0) -> tuple[float, float, float, float]:
@@ -57,11 +67,16 @@ def _rgba01_u32(r: float, g: float, b: float, a: float) -> int:
 
 
 def _lighten(value: str, amt: float) -> str:
-    r, g, b = _parse_hex(value)
-    r = int(r + (255 - r) * amt)
-    g = int(g + (255 - g) * amt)
-    b = int(b + (255 - b) * amt)
-    return "#%02x%02x%02x" % (r, g, b)
+    key = (value, amt)
+    cached = _LIGHTEN_CACHE.get(key)
+    if cached is None:
+        r, g, b = _parse_hex(value)
+        r = int(r + (255 - r) * amt)
+        g = int(g + (255 - g) * amt)
+        b = int(b + (255 - b) * amt)
+        cached = "#%02x%02x%02x" % (r, g, b)
+        _LIGHTEN_CACHE[key] = cached
+    return cached
 
 
 class LaunchBarHost:
@@ -257,8 +272,15 @@ class LaunchBarHost:
         if editing:
             self._draw_slot_grid(dl, win_pos, ox, oy)
 
+        # Every tile in a bar shares the same face colors, so push them ONCE around the
+        # loop instead of 3 push + 1 pop per tile (the button reads the current style).
+        fa = bar.colors.face_a
+        PyImGui.push_style_color(PyImGui.ImGuiCol.Button, _hex_rgba01(bar.colors.face, fa))
+        PyImGui.push_style_color(PyImGui.ImGuiCol.ButtonHovered, _hex_rgba01(_lighten(bar.colors.face, 0.12), fa))
+        PyImGui.push_style_color(PyImGui.ImGuiCol.ButtonActive, _hex_rgba01(_lighten(bar.colors.face, 0.20), fa))
         for tile in list(bar.tiles):
             self._draw_tile(manager, editing, tile, ox, oy, win_pos, dl)
+        PyImGui.pop_style_color(3)
 
         if editing:
             self._draw_empty_cells(manager, ox, oy, win_pos)
@@ -286,13 +308,8 @@ class LaunchBarHost:
         action = tile.action
         active = meta.enabled if meta is not None else (manager.is_action_active(action) if action else False)
 
-        fa = bar.colors.face_a
-        PyImGui.push_style_color(PyImGui.ImGuiCol.Button, _hex_rgba01(bar.colors.face, fa))
-        PyImGui.push_style_color(PyImGui.ImGuiCol.ButtonHovered, _hex_rgba01(_lighten(bar.colors.face, 0.12), fa))
-        PyImGui.push_style_color(PyImGui.ImGuiCol.ButtonActive, _hex_rgba01(_lighten(bar.colors.face, 0.20), fa))
         PyImGui.set_cursor_pos((cx, cy))
         clicked = self._tile_button(bar, tile, meta, fmeta, tw, th)
-        PyImGui.pop_style_color(3)
 
         # widget / action / function tiles: tooltip (+ active indicator for stateful kinds).
         # Functions are fire-and-forget, so they never light the active indicator.
@@ -347,7 +364,7 @@ class LaunchBarHost:
             return PyImGui.button("%s##tile_%s_%s" % (label, bar.id, tile.id), tw, th)
         if meta is None:
             return PyImGui.button("%dx%d##tile_%s_%s" % (tile.w, tile.h, bar.id, tile.id), tw, th)
-        if meta.icon and os.path.isfile(meta.icon):
+        if meta.icon:
             from Py4GWCoreLib._legacy_facade import ImGui_Legacy
 
             return ImGui_Legacy.image_button("##tile_%s_%s" % (bar.id, tile.id), meta.icon, tw, th)

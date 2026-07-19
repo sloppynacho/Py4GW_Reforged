@@ -10,8 +10,26 @@ All enable/disable/configure calls are keyed by the full widget id (``folder_scr
 the handler's enable/disable take ``plain_name``, so we bridge via the resolved ``Widget``.
 """
 
+import os
 from dataclasses import dataclass
 from typing import Optional
+
+# Icon existence is validated once per path and cached: widgets don't relocate their icon
+# files mid-session, and get() -> _meta() runs per tile per frame, so re-stat'ing every
+# frame is pure waste. If a file is removed while running, that's the user's problem — we
+# do not health-check per frame.
+_ICON_VALIDATED: dict[str, str] = {}
+
+
+def _validated_icon(raw: str) -> str:
+    """Return `raw` if its icon file exists (checked once, cached), else ''."""
+    if not raw:
+        return ""
+    cached = _ICON_VALIDATED.get(raw)
+    if cached is None:
+        cached = raw if os.path.isfile(raw) else ""
+        _ICON_VALIDATED[raw] = cached
+    return cached
 
 
 @dataclass
@@ -52,7 +70,7 @@ class WidgetRuntime:
         return WidgetMeta(
             id=widget_id,
             name=str(getattr(w, "name", "") or widget_id),
-            icon=str(getattr(w, "image", "") or ""),
+            icon=_validated_icon(str(getattr(w, "image", "") or "")),
             category=category,
             enabled=bool(getattr(w, "enabled", False)),
             configurable=bool(getattr(w, "has_configure_property", False)),

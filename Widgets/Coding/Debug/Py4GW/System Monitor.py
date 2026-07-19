@@ -1,1317 +1,849 @@
-import re
-import random
-from dataclasses import dataclass, asdict
-from collections.abc import Callable
+from typing import Any
 
-import Py4GW
 import PyImGui
 import PyProfiler
-from Py4GWCoreLib.py4gwcorelib_src.Timer import ThrottledTimer
-from Py4GWCoreLib.py4gwcorelib_src.Color import Color, ColorPalette
+from Py4GWCoreLib import UIManager, ThrottledTimer, Color, ColorPalette, ImGui_Legacy
+from Py4GWCoreLib import ProfilingRegistry, SimpleProfiler, WidgetHandler
 
 MODULE_NAME = "System Monitor"
 MODULE_ICON = "Textures/Module_Icons/Monitor Diagnostic.png"
+MODULE_CATEGORY = "Coding"
+MODULE_TAGS = ["performance", "profiler", "fps", "frametime", "flame graph", "monitor", "debug"]
+# Replaces the legacy "System Monitor" and "Widget Profiler" -- keep both as aliases
+# so searches for the old names still find this widget.
+MODULE_ALIASES = ["Widget Profiler", "System Monitor UI"]
+OPTIONAL = True
 
-update_throttle = ThrottledTimer(1000)  # Throttle updates to at most once per second
+
+class SystemInfo:
+    target_fps: int = 0        # configured frame limit (0 = unlimited)
+    fps: float = 0.0           # actual frames per second (smoothed)
+    ms_per_frame: float = 0.0  # actual time for one whole frame
+    ms_used: float = 0.0       # time all scripts / widgets consume per frame
+    widgets: list[tuple[str, float]] = []  # (widget, ms) per widget, sorted desc
+    bar_labels: list[str] = []             # cached stacked-bar segment labels
+    bar_values: list[float] = []           # cached stacked-bar segment values (ms)
+    widget_colors: dict[str, Color] = {}   # widget name -> its stacked-bar segment Color
+
+#tells if the widget has been initialized or not, so we can avoid reinitializing it every frame
+initialized = False
+
+system_info = SystemInfo()
+
+# Which metric the view focuses on: 0 = whole frame, 1 = scripts only.
+selected_view: int = 1
+
+# Widget whose detail window is open ("" = none). Set by clicking a bar segment
+# or a table row; both feed this one value, so both open the same window.
+selected_widget: str = ""
+
+# get_reports() recomputes percentiles for every tracked metric, so only sample
+# that heavier total on a throttle; fps / frame-time are cheap and stay live.
+_usage_timer = ThrottledTimer(1000)
+
+# Palette colors resolved ONCE at import. ColorPalette.GetColor() rebuilds a
+# ~95-entry lookup map on every call (and allocates a tuple), so calling it per
+# frame -- as the header colors did -- is the main reason this window cost more
+# than the original, which caches every palette lookup. Resolve the fixed set once.
+_COL_GREEN = ColorPalette.GetColor("GWGreen").to_tuple_normalized()
+_COL_GOLD = ColorPalette.GetColor("Gold").to_tuple_normalized()
+_COL_RED = ColorPalette.GetColor("Red").to_tuple_normalized()
+_COL_DARKRED = ColorPalette.GetColor("DarkRed").to_tuple_normalized()
+_COL_DARKCYAN = ColorPalette.GetColor("DarkCyan").to_tuple_normalized()
+_TRACK_COLOR = ColorPalette.GetColor("GwDisabled")  # progress-bar track (Color proxy)
+_SEL_HEADER = ColorPalette.GetColor("DodgerBlue").opacity(0.55).to_tuple_normalized()        # selected row
+_SEL_HEADER_HOVER = ColorPalette.GetColor("DodgerBlue").opacity(0.30).to_tuple_normalized()  # hovered row
+
+# Phase colors for the detail window (Draw / Main / Update), matching the mockup.
+_PHASE_COLORS = {
+    "Draw": ColorPalette.GetColor("DodgerBlue").to_tuple_normalized(),
+    "Main": ColorPalette.GetColor("Gold").to_tuple_normalized(),
+    "Update": ColorPalette.GetColor("LightGreen").to_tuple_normalized(),
+}
+
+# Detail window: cache the selected widget's metrics. get_reports() recomputes
+# percentiles for every metric in C++, so never call it per frame while the
+# window is open -- rebuild only when the selection changes or on this throttle.
+_detail_timer = ThrottledTimer(500)
+_detail_widget: str = ""
+_detail_metrics: list[tuple[str, float, float, float]] = []
+_detail_total: float = 0.0
+_detail_phase_totals: dict[str, float] = {"Draw": 0.0, "Main": 0.0, "Update": 0.0}
+_detail_history: list[float] = []      # dominant metric's sample history (sparkline)
+_detail_spark_label: str = ""          # raw name of the metric shown in the sparkline
+
+# On-demand deep profile (ported from Widget Profiler): a cProfile capture of one
+# widget's callbacks over N frames, rendered as an ImPlot flame graph. Only works
+# for real WidgetManager widgets (keyed by folder_script_name, which equals the
+# entry name); native subsystem entries have no cProfile path.
+_PROFILE_DURATION = 120  # default capture length (frames); user-adjustable at runtime
+_PROFILE_PHASES = ("update", "draw", "main")
+_FLAME_MAX_DEPTH = 10
+_FLAME_MIN_FRAC = 0.004  # skip cells narrower than 0.4% of the current view
+
+_profile_frames: int = _PROFILE_DURATION  # frames the NEXT capture will run (input field)
+_prof_active: Any = None                  # SimpleProfiler while a capture runs, else None
+_prof_target: str = ""                    # widget being captured
+_prof_frames_left: int = 0
+_prof_total: int = _PROFILE_DURATION      # frames the RUNNING capture will process
+
+_flame_widget: str = ""    # widget the current flame result is for
+_flame_error: str = ""     # non-empty -> show this message instead of a graph
+_flame_stats: dict = {}    # func_key -> (cc, nc, self_ns, cum_ns, callers)
+_flame_names: dict = {}    # func_key -> display name
+_flame_callees: dict = {}  # func_key -> [(callee_key, edge_cum, edge_count)]
+_flame_roots: list = []    # [(func_key, cum_ns)] top-level, sorted desc
+_flame_zoom = None         # zoomed func_key, or None for the roots
+_flame_cells: list = []    # laid-out cells: (key, x0, x1, depth, self_ms, cum_ms, edge_calls, cidx)
+_flame_depth: int = 0
+_flame_frames: int = _PROFILE_DURATION  # frames the CURRENT flame result was captured over
+_flame_hovered = None      # func_key hovered last frame (highlights all its cells)
+_FLAME_HL = (1.0, 1.0, 1.0, 1.0)  # white highlight border
+
+# Flame cell colors: a cohesive cold ramp (deep violet-blue -> teal -> sky),
+# all resolved from ColorPalette once, then hashed per func key for variety.
+_FLAME_PALETTE = [
+    ColorPalette.GetColor(_n).to_tuple_normalized()
+    for _n in ("MidnightViolet", "DarkBlue", "SlateBlue", "DodgerBlue", "Teal", "DarkCyan", "Turquoise", "SkyBlue")
+]
 
 
-@dataclass
-class ParsedMetricName:
-    """Normalized representation of a profiler metric name.
+def _refresh_usage() -> tuple[list[tuple[str, float]], float]:
+    """Group profiler metrics into per-widget totals + the overall total (ms).
 
-    The profiler emits one metric schema with multiple naming patterns:
-    pure dotted names (e.g. `Draw.Callback.Data.SharedMemory.Update`) and
-    dotted prefixes followed by path-like script names (e.g.
-    `Main.Callback.Update.Guild Wars\\Items & Loot/InventoryPlus.py`).
-
-    This dataclass stores both the raw tokenization and semantic fields used for
-    grouping (`phase`, `subject_token`, `operation_token`, `display_token`).
+    The callback scheduler names each metric "<Context>.Callback.<Phase>.<widget>",
+    so splitting on '.' (max 3 times) isolates the widget/callback name; a widget's
+    Draw/Main/Update phases are summed into one number. Metrics that are not
+    callbacks keep their raw name. Each metric is a leaf, so the averages add up to
+    the total with no double counting.
     """
-
-    raw_name: str
-    dot_tokens: list[str]
-    hierarchy_tokens: list[str]
-    semantic_hierarchy_tokens: list[str]
-    path_tokens: list[str]
-    path_tail_tokens: list[str]
-    all_tokens: list[str]
-    phase: str
-    dot_prefix_tokens: list[str]
-    path_tail: str
-    is_path_metric: bool
-    script_path: str
-    script_name: str
-    script_like: str
-    leaf_token: str
-    operation_token: str
-    subject_token: str
-    display_token: str
-
-    def to_dict(self) -> dict:
-        """Return the parsed record as a plain dictionary."""
-        return asdict(self)
+    # Widgets that are no longer enabled still return stale samples for up to the
+    # native window (~60s), so exclude them here -- otherwise a just-closed widget
+    # keeps polluting the totals/table. Native subsystem metrics (not widgets) are
+    # always kept.
+    known = WidgetHandler().widgets
+    per_widget: dict[str, float] = {}
+    total = 0.0
+    for report in PyProfiler.get_reports():
+        # report = (name, min, avg, p50, p95, p99, max)  -- all milliseconds
+        name = report[0]
+        avg = report[2]
+        parts = name.split(".", 3)
+        is_callback = len(parts) == 4 and parts[1] == "Callback"
+        widget = parts[3] if is_callback else name
+        if is_callback and widget in known and not known[widget].enabled:
+            continue  # closed / disabled widget -> stale data, drop it
+        total += avg
+        per_widget[widget] = per_widget.get(widget, 0.0) + avg
+    rows = sorted(per_widget.items(), key=lambda kv: kv[1], reverse=True)
+    return rows, total
 
 
-class ProfilerMetricNameCatalog:
-    """Encapsulate profiler metric-name fetching, parsing, indexing, and lookup.
+def _rebuild_bar_cache() -> None:
+    """Precompute the stacked-bar segments once per data refresh (top 10 + others).
 
-    The class is designed to be portable: a caller can use it without relying on
-    any UI helpers. It can ingest data from either live Py4GW profiler metrics or
-    pasted console output, parse the naming patterns, and expose indexed/grouped
-    access to the normalized results.
-
-    Typical usage:
-        catalog = ProfilerMetricNameCatalog()
-        catalog.refresh_from_live()
-        # or catalog.load_console_dump(text)
-        rows = catalog.items
-        grouped = catalog.group_by_attr("subject_token")
+    draw() runs every frame but system_info.widgets only changes on the 1s throttle,
+    so the grouping is done here, not in the hot path.
     """
-
-    _METRIC_LINE_RE = re.compile(
-        r"""
-        ^.*?\[print:\]\s*
-        (?P<name>.+?)
-        :\s+Min=
-        """,
-        re.VERBOSE,
-    )
-
-    _GENERIC_OPERATION_LEAVES = {
-        "update",
-        "draw",
-        "main",
-        "total",
-        "updateptr",
-        "updatecache",
-    }
-
-    def __init__(self) -> None:
-        """Create an empty catalog with no loaded data and no indexes."""
-        self.raw_names: list[str] = []
-        self.items: list[ParsedMetricName] = []
-        self.stats_by_raw_name: dict[str, dict[str, float]] = {}
-        self.history_by_raw_name: dict[str, list[float]] = {}
-
-        self.by_raw_name: dict[str, ParsedMetricName] = {}
-        self.by_phase: dict[str, list[ParsedMetricName]] = {}
-        self.by_subject: dict[str, list[ParsedMetricName]] = {}
-        self.by_display: dict[str, list[ParsedMetricName]] = {}
-        self.by_script_path: dict[str, list[ParsedMetricName]] = {}
-        self.by_script_name: dict[str, list[ParsedMetricName]] = {}
-        self.by_operation: dict[str, list[ParsedMetricName]] = {}
-        self.by_semantic_key: dict[tuple[str, ...], list[ParsedMetricName]] = {}
-
-    def clear(self) -> None:
-        """Remove loaded names, parsed items, and all indexes."""
-        self.raw_names.clear()
-        self.items.clear()
-        self.stats_by_raw_name.clear()
-        self.history_by_raw_name.clear()
-        self.by_raw_name.clear()
-        self.by_phase.clear()
-        self.by_subject.clear()
-        self.by_display.clear()
-        self.by_script_path.clear()
-        self.by_script_name.clear()
-        self.by_operation.clear()
-        self.by_semantic_key.clear()
-
-    def extract_metric_name_from_console_line(self, line: str) -> str | None:
-        """Extract a raw metric name from a console print line.
-
-        Args:
-            line: Console output line that may contain a profiler metric print.
-
-        Returns:
-            The metric name if the line matches the profiler print format,
-            otherwise `None`.
-        """
-        match = self._METRIC_LINE_RE.match(line.strip())
-        if not match:
-            return None
-        return match.group("name").strip()
-
-    def parse_name(self, name: str) -> ParsedMetricName:
-        """Parse a single raw profiler metric name into semantic tokens.
-
-        Naming rules handled here:
-        - Common leading categories split by `.` (phase, callback buckets, etc.)
-        - Optional path-like tail split by `/` or `\\`
-        - Path metrics preserve full path (`script_path`) but expose a compact
-          filename leaf (`script_name`) for display
-        - Generic trailing operation markers (`Update`, `Draw`, `UpdatePtr`, ...)
-          are recognized so grouping can prefer the measured subject instead
-
-        Args:
-            name: Raw profiler metric name.
-
-        Returns:
-            ParsedMetricName: Normalized parsed representation.
-        """
-        raw = name.strip()
-        dot_tokens = [t for t in raw.split(".") if t]
-        phase = dot_tokens[0] if dot_tokens else ""
-
-        path_start_idx = -1
-        for i, token in enumerate(dot_tokens):
-            if "/" in token or "\\" in token:
-                path_start_idx = i
-                break
-
-        is_path_metric = path_start_idx >= 0
-        if is_path_metric:
-            dot_prefix_tokens = dot_tokens[:path_start_idx]
-            path_tail = ".".join(dot_tokens[path_start_idx:])
-        else:
-            dot_prefix_tokens = dot_tokens[:-1] if len(dot_tokens) > 1 else []
-            path_tail = dot_tokens[-1] if dot_tokens else raw
-
-        path_tail_tokens = [t for t in re.split(r"[\\/]+", path_tail) if t]
-        path_tokens = [t for t in re.split(r"[\\/]+", raw) if t]
-        hierarchy_tokens = (dot_prefix_tokens + path_tail_tokens) if is_path_metric else list(dot_tokens)
-        all_tokens = [t for t in re.split(r"[./\\\\]+", raw) if t]
-
-        leaf_token = path_tail_tokens[-1] if (is_path_metric and path_tail_tokens) else (dot_tokens[-1] if dot_tokens else raw)
-
-        if is_path_metric:
-            script_like = path_tail
-        elif len(dot_tokens) >= 2:
-            script_like = dot_tokens[-2]
-        else:
-            script_like = leaf_token
-
-        script_path = path_tail if is_path_metric else ""
-        script_name = path_tail_tokens[-1] if (is_path_metric and path_tail_tokens) else script_like
-
-        operation_token = leaf_token
-        subject_token = script_name if is_path_metric else script_like
-
-        leaf_is_generic_operation = operation_token.lower() in self._GENERIC_OPERATION_LEAVES
-
-        if is_path_metric:
-            display_token = script_name
-        elif leaf_is_generic_operation:
-            display_token = subject_token
-        else:
-            display_token = leaf_token
-
-        semantic_hierarchy_tokens = list(hierarchy_tokens)
-        if semantic_hierarchy_tokens:
-            if is_path_metric:
-                semantic_hierarchy_tokens[-1] = script_name
-            elif leaf_is_generic_operation and len(semantic_hierarchy_tokens) >= 2:
-                semantic_hierarchy_tokens = semantic_hierarchy_tokens[:-1]
-
-        return ParsedMetricName(
-            raw_name=raw,
-            dot_tokens=dot_tokens,
-            hierarchy_tokens=hierarchy_tokens,
-            semantic_hierarchy_tokens=semantic_hierarchy_tokens,
-            path_tokens=path_tokens,
-            path_tail_tokens=path_tail_tokens,
-            all_tokens=all_tokens,
-            phase=phase,
-            dot_prefix_tokens=dot_prefix_tokens,
-            path_tail=path_tail,
-            is_path_metric=is_path_metric,
-            script_path=script_path,
-            script_name=script_name,
-            script_like=script_like,
-            leaf_token=leaf_token,
-            operation_token=operation_token,
-            subject_token=subject_token,
-            display_token=display_token,
-        )
-
-    def load_names(self, names: list[str]) -> list[ParsedMetricName]:
-        """Load and parse raw metric names, replacing the catalog contents.
-
-        Args:
-            names: List of raw metric names.
-
-        Returns:
-            Parsed records in the same order as the input (after trimming empty
-            entries).
-        """
-        self.clear()
-        self.raw_names = [n.strip() for n in names if n and n.strip()]
-        self.items = [self.parse_name(name) for name in self.raw_names]
-        self._rebuild_indexes()
-        return self.items
-
-    def load_console_dump(self, text: str) -> list[ParsedMetricName]:
-        """Parse profiler metric names from pasted console output and store them.
-
-        Args:
-            text: Multiline console dump containing `[print:] ...: Min=...` rows.
-
-        Returns:
-            Parsed metric-name records extracted from the dump.
-        """
-        names: list[str] = []
-        for line in text.splitlines():
-            name = self.extract_metric_name_from_console_line(line)
-            if name:
-                names.append(name)
-        return self.load_names(names)
-
-    def get_live_metric_names(self) -> list[str]:
-        """Fetch live profiler metric names from Py4GW if available.
-
-        Returns:
-            List of raw metric names. Returns an empty list when Py4GW is not
-            available or the call fails.
-        """
-        if Py4GW is None:
-            return []
-        try:
-            return list(PyProfiler.get_metric_names())
-        except Exception:
-            return []
-
-    def get_live_profiler_reports(self) -> list[tuple]:
-        """Fetch live profiler report rows from Py4GW if available.
-
-        Returns:
-            A list of report tuples in the format expected from
-            `PyProfiler.get_reports()`, or an empty list on failure.
-        """
-        if Py4GW is None:
-            return []
-        try:
-            return list(PyProfiler.get_reports())
-        except Exception:
-            return []
-
-    def refresh_from_live(self) -> list[ParsedMetricName]:
-        """Fetch live metric names from Py4GW, parse them, and rebuild indexes.
-
-        Returns:
-            Parsed metric-name records for the live profiler set.
-        """
-        parsed = self.load_names(self.get_live_metric_names())
-        self._load_stats_from_reports(self.get_live_profiler_reports())
-        return parsed
-
-    def get_live_profiler_history(self, name: str) -> list[float]:
-        """Fetch a profiler history trace for a metric from Py4GW, if available."""
-        if Py4GW is None:
-            return []
-        try:
-            return [float(v) for v in PyProfiler.get_history(name)]
-        except Exception:
-            return []
-
-    def has_usage_stats(self) -> bool:
-        """Return `True` when live profiler timing stats are available."""
-        return bool(self.stats_by_raw_name)
-
-    def clear_usage_stats(self) -> None:
-        """Clear cached profiler timing stats while keeping parsed names/indexes."""
-        self.stats_by_raw_name.clear()
-        self.history_by_raw_name.clear()
-        PyProfiler.reset()
-
-    def get_stats(self, raw_name: str) -> dict[str, float] | None:
-        """Return timing stats for a raw metric name, if available."""
-        return self.stats_by_raw_name.get(raw_name)
-
-    def get_history(self, raw_name: str, refresh: bool = False) -> list[float]:
-        """Return cached profiler history for a raw metric name, optionally refreshing."""
-        if not refresh and raw_name in self.history_by_raw_name:
-            return self.history_by_raw_name[raw_name]
-        hist = self.get_live_profiler_history(raw_name)
-        self.history_by_raw_name[raw_name] = hist
-        return hist
-
-    def get(self, raw_name: str) -> ParsedMetricName | None:
-        """Return the parsed record for an exact raw metric name, if present."""
-        return self.by_raw_name.get(raw_name)
-
-    def filter(self, predicate: Callable[[ParsedMetricName], bool]) -> list[ParsedMetricName]:
-        """Return parsed items matching a predicate.
-
-        Args:
-            predicate: Function that receives a parsed record and returns `True`
-                when the record should be included.
-
-        Returns:
-            Matching parsed records.
-        """
-        return [item for item in self.items if predicate(item)]
-
-    def filter_text(self, needle: str) -> list[ParsedMetricName]:
-        """Return parsed items whose normalized fields contain a text fragment.
-
-        Args:
-            needle: Case-insensitive substring matched against raw name, phase,
-                display token, subject token, script path/name, and all tokens.
-
-        Returns:
-            Matching parsed records. Empty `needle` returns all items.
-        """
-        if not needle:
-            return list(self.items)
-        n = needle.lower()
-        return self.filter(
-            lambda item: (
-                n in item.raw_name.lower()
-                or n in item.phase.lower()
-                or n in item.display_token.lower()
-                or n in item.subject_token.lower()
-                or n in item.script_name.lower()
-                or n in item.script_path.lower()
-                or any(n in tok.lower() for tok in item.all_tokens)
-            )
-        )
-
-    def group_by_attr(self, attr_name: str) -> dict[str, list[ParsedMetricName]]:
-        """Group records by any attribute on `ParsedMetricName`.
-
-        Args:
-            attr_name: Name of a `ParsedMetricName` attribute (for example
-                `phase`, `subject_token`, `operation_token`, `script_path`).
-
-        Returns:
-            Mapping from attribute value (as string) to matching records.
-        """
-        grouped: dict[str, list[ParsedMetricName]] = {}
-        for item in self.items:
-            value = getattr(item, attr_name, "")
-            grouped.setdefault(str(value), []).append(item)
-        return grouped
-
-    def group_by_semantic_prefix(self, depth: int) -> dict[tuple[str, ...], list[ParsedMetricName]]:
-        """Group records by a prefix of `semantic_hierarchy_tokens`.
-
-        Args:
-            depth: Number of semantic hierarchy tokens to keep in the grouping
-                key. `0` groups all records together.
-
-        Returns:
-            Mapping from semantic token tuple prefix to matching records.
-        """
-        depth = max(0, depth)
-        grouped: dict[tuple[str, ...], list[ParsedMetricName]] = {}
-        for item in self.items:
-            key = tuple(item.semantic_hierarchy_tokens[:depth])
-            grouped.setdefault(key, []).append(item)
-        return grouped
-
-    def summary_counts(self) -> dict[str, int]:
-        """Return lightweight diagnostics about the loaded catalog.
-
-        Returns:
-            Counts for total records and distinct keys in core indexes.
-        """
-        return {
-            "items": len(self.items),
-            "phases": len(self.by_phase),
-            "subjects": len(self.by_subject),
-            "displays": len(self.by_display),
-            "script_paths": len(self.by_script_path),
-            "script_names": len(self.by_script_name),
-            "operations": len(self.by_operation),
-            "semantic_keys": len(self.by_semantic_key),
-        }
-
-    def print_sample(self, limit: int = 20) -> None:
-        """Print a sample of parsed records for manual verification.
-
-        Args:
-            limit: Maximum number of parsed records to print.
-        """
-        for idx, item in enumerate(self.items[:limit], start=1):
-            print(f"[{idx}] {item.raw_name}")
-            print(f"  phase       : {item.phase}")
-            print(f"  script_path : {item.script_path}")
-            print(f"  script_name : {item.script_name}")
-            print(f"  subject     : {item.subject_token}")
-            print(f"  operation   : {item.operation_token}")
-            print(f"  display     : {item.display_token}")
-            print(f"  semantic    : {item.semantic_hierarchy_tokens}")
-            stats = self.stats_by_raw_name.get(item.raw_name)
-            if stats:
-                print(f"  avg         : {stats['avg']:.4f}ms")
-        if len(self.items) > limit:
-            print(f"... ({len(self.items) - limit} more)")
-
-    def build_usage_groups_by_display(
-        self,
-        items: list[ParsedMetricName] | None = None,
-        include_phases: set[str] | None = None,
-    ) -> list[dict]:
-        """Aggregate usage stats by normalized display token (leaf/entity label).
-
-        A single display group may contain metrics from multiple phases
-        (`Draw`, `Main`, `Update`). This method aggregates those phase-specific
-        average timings and returns rows sorted by the selected-phase total.
-
-        Args:
-            items: Optional subset of parsed items to aggregate. If omitted, all
-                catalog items are used.
-            include_phases: Optional phase filter controlling which phases
-                contribute to `selected_total_avg`. If omitted, `Draw`, `Main`,
-                and `Update` are all included.
-
-        Returns:
-            list[dict]: Aggregated usage rows with phase totals, member records,
-            and sort-ready totals.
-        """
-        source_items = self.items if items is None else items
-        selected_phases = include_phases or {"Draw", "Main", "Update"}
-
-        grouped: dict[str, dict] = {}
-        for item in source_items:
-            row = grouped.get(item.display_token)
-            if row is None:
-                row = {
-                    "display": item.display_token,
-                    "subjects": set(),
-                    "script_paths": set(),
-                    "members": [],
-                    "phase_stats": {
-                        "Draw": {"min": 0.0, "avg": 0.0, "p50": 0.0, "p95": 0.0, "p99": 0.0, "max": 0.0},
-                        "Main": {"min": 0.0, "avg": 0.0, "p50": 0.0, "p95": 0.0, "p99": 0.0, "max": 0.0},
-                        "Update": {"min": 0.0, "avg": 0.0, "p50": 0.0, "p95": 0.0, "p99": 0.0, "max": 0.0},
-                    },
-                    "selected_stats": {"min": 0.0, "avg": 0.0, "p50": 0.0, "p95": 0.0, "p99": 0.0, "max": 0.0},
-                    "all_stats": {"min": 0.0, "avg": 0.0, "p50": 0.0, "p95": 0.0, "p99": 0.0, "max": 0.0},
-                }
-                grouped[item.display_token] = row
-
-            row["subjects"].add(item.subject_token)
-            if item.script_path:
-                row["script_paths"].add(item.script_path)
-            row["members"].append(item)
-
-            stats = self.stats_by_raw_name.get(item.raw_name)
-            if not stats:
-                continue
-
-            phase_key = item.phase if item.phase in ("Draw", "Main", "Update") else None
-
-            for metric_key in ("min", "avg", "p50", "p95", "p99", "max"):
-                value = stats[metric_key]
-                row["all_stats"][metric_key] += value
-                if item.phase in selected_phases:
-                    row["selected_stats"][metric_key] += value
-                if phase_key is not None:
-                    row["phase_stats"][phase_key][metric_key] += value
-
-        rows = list(grouped.values())
-        for row in rows:
-            row["subjects"] = sorted(row["subjects"])
-            row["script_paths"] = sorted(row["script_paths"])
-            row["members"].sort(
-                key=lambda m: self.stats_by_raw_name.get(m.raw_name, {}).get("avg", 0.0),
-                reverse=True,
-            )
-
-        rows.sort(key=lambda r: r["selected_stats"]["avg"], reverse=True)
-        return rows
-
-    def _load_stats_from_reports(self, reports: list[tuple]) -> None:
-        """Load timing stats from profiler reports into a raw-name lookup map."""
-        self.stats_by_raw_name = {}
-        for row in reports:
-            try:
-                name, min_time, avg_time, p50, p95, p99, max_time = row
-            except Exception:
-                continue
-            self.stats_by_raw_name[str(name)] = {
-                "min": float(min_time),
-                "avg": float(avg_time),
-                "p50": float(p50),
-                "p95": float(p95),
-                "p99": float(p99),
-                "max": float(max_time),
-            }
-
-    def _rebuild_indexes(self) -> None:
-        """Rebuild all lookup indexes from the current `items` list."""
-        self.by_raw_name = {item.raw_name: item for item in self.items}
-        self.by_phase = {}
-        self.by_subject = {}
-        self.by_display = {}
-        self.by_script_path = {}
-        self.by_script_name = {}
-        self.by_operation = {}
-        self.by_semantic_key = {}
-
-        for item in self.items:
-            self.by_phase.setdefault(item.phase, []).append(item)
-            self.by_subject.setdefault(item.subject_token, []).append(item)
-            self.by_display.setdefault(item.display_token, []).append(item)
-            if item.script_path:
-                self.by_script_path.setdefault(item.script_path, []).append(item)
-            self.by_script_name.setdefault(item.script_name, []).append(item)
-            self.by_operation.setdefault(item.operation_token, []).append(item)
-            self.by_semantic_key.setdefault(tuple(item.semantic_hierarchy_tokens), []).append(item)
-
-
-# Lightweight viewer state (optional UI built on top of the catalog).
-_initialized = False
-_catalog = ProfilerMetricNameCatalog()
-_ui_filter_text = ""
-_ui_show_details = False
-_ui_max_rows = 15
-_ui_include_draw = True
-_ui_include_main = True
-_ui_include_update = True
-_ui_selected_entry = ""
-_ui_show_selected_window = True
-_history_seconds_per_sample = 0.1
-_history_tick_seconds = 5.0
-_ui_entry_color_map: dict[str, str] = {}
-_ui_palette_order: list[str] = []
-
-
-def _print_usage_rows_to_console(rows: list[dict], selected_display: str = "", max_rows: int | None = None) -> None:
-    selected_phases = []
-    if _ui_include_draw:
-        selected_phases.append("Draw")
-    if _ui_include_main:
-        selected_phases.append("Main")
-    if _ui_include_update:
-        selected_phases.append("Update")
-
-    limit = max_rows if max_rows is not None else _ui_max_rows
-    visible_rows = rows[:limit] if limit > 0 else []
-    total_visible = sum(row["selected_stats"]["avg"] for row in rows)
-
-    print("=== System Monitor: Usage Snapshot ===")
-    print(
-        f"Filter='{_ui_filter_text}' IncludedPhases={','.join(selected_phases) or 'None'} "
-        f"Rows={len(rows)} Printed={len(visible_rows)} IncludedAvgTotal={total_visible:.3f}ms"
-    )
-
-    if visible_rows:
-        for row in visible_rows:
-            print(
-                f"[{row['display']}] total_avg={row['selected_stats']['avg']:.3f}ms "
-                f"draw={row['phase_stats']['Draw']['avg']:.3f}ms "
-                f"main={row['phase_stats']['Main']['avg']:.3f}ms "
-                f"update={row['phase_stats']['Update']['avg']:.3f}ms "
-                f"members={len(row['members'])}"
-            )
-            if row["subjects"]:
-                print(f"  subjects={', '.join(row['subjects'][:8])}")
-            if row["script_paths"]:
-                print(f"  scripts={', '.join(row['script_paths'][:4])}")
-    elif not selected_display:
-        print("No usage rows available.")
-        return
-
-    if not selected_display:
-        return
-
-    selected = next((row for row in rows if row["display"] == selected_display), None)
-    if selected is None:
-        print(f"Selected entry '{selected_display}' is not present in the current rows.")
-        return
-
-    print(f"=== System Monitor: Selected Entry Detail [{selected_display}] ===")
-    print(f"IncludedAvgTotal={selected['selected_stats']['avg']:.3f}ms Members={len(selected['members'])}")
-    for phase_name in ("Draw", "Main", "Update"):
-        phase_stats = selected["phase_stats"][phase_name]
-        print(
-            f"  - {phase_name}: min={phase_stats['min']:.3f} avg={phase_stats['avg']:.3f} "
-            f"p50={phase_stats['p50']:.3f} p95={phase_stats['p95']:.3f} "
-            f"p99={phase_stats['p99']:.3f} max={phase_stats['max']:.3f}"
-        )
-
-    print("Top member metrics:")
-    for item in selected["members"][:max(15, _ui_max_rows)]:
-        stats = _catalog.get_stats(item.raw_name)
-        if not stats:
+    rows = system_info.widgets
+    labels = [name for name, _ms in rows[:10]]
+    values = [ms for _name, ms in rows[:10]]
+    others = sum(ms for _name, ms in rows[10:])
+    if others > 0.0:
+        labels.append("others")
+        values.append(others)
+    system_info.bar_labels = labels
+    system_info.bar_values = values
+
+
+def _rebuild_detail(widget: str) -> None:
+    """Rebuild every cached field for the widget detail window (throttled).
+
+    Groups the widget's metrics into: a per-phase (Draw/Main/Update) avg total for
+    the breakdown bars, the full (label, avg, p95, max) list for the table, and the
+    heaviest single metric's sample history for the sparkline.
+    """
+    global _detail_metrics, _detail_total, _detail_phase_totals
+    global _detail_history, _detail_spark_label
+
+    metrics: list[tuple[str, float, float, float]] = []
+    phase_totals = {"Draw": 0.0, "Main": 0.0, "Update": 0.0}
+    total = 0.0
+    dominant_raw = ""
+    dominant_avg = -1.0
+    for report in PyProfiler.get_reports():
+        nm = report[0]
+        parts = nm.split(".", 3)
+        is_callback = len(parts) == 4 and parts[1] == "Callback"
+        wname = parts[3] if is_callback else nm
+        if wname != widget:
             continue
-        hist = _catalog.get_history(item.raw_name)
-        latest = hist[-1] if hist else 0.0
-        print(
-            f"  - {item.phase} {item.raw_name}: min={stats['min']:.3f} avg={stats['avg']:.3f} "
-            f"p50={stats['p50']:.3f} p95={stats['p95']:.3f} p99={stats['p99']:.3f} "
-            f"max={stats['max']:.3f} samples={len(hist)} latest={latest:.3f}"
-        )
-
-
-def _ensure_loaded() -> None:
-    """Initialize the viewer cache once from live metrics."""
-    global _initialized
-    if _initialized:
-        return
-    _initialized = True
-    _catalog.refresh_from_live()
-
-
-def _auto_refresh_if_needed() -> None:
-    """Refresh the shared catalog at most once per second using the throttle."""
-    if update_throttle.IsExpired():
-        _catalog.refresh_from_live()
-        update_throttle.Reset()
-
-
-def _entry_palette_names() -> list[str]:
-    """Return a randomized full-palette order using every ColorPalette entry."""
-    global _ui_palette_order
-    if _ui_palette_order:
-        return list(_ui_palette_order)
-    _ui_palette_order = [n.lower() for n in ColorPalette.ListColors()]
-    random.shuffle(_ui_palette_order)
-    return list(_ui_palette_order)
-
-
-def _c4(name: str, alpha: float | None = None) -> tuple[float, float, float, float]:
-    """Return a normalized color tuple from ColorPalette, optionally overriding alpha."""
-    c = ColorPalette.GetColor(name).copy()
-    if alpha is not None:
-        c = c.opacity(alpha)
-    return c.to_tuple_normalized()
-
-
-def _c32(name: str, alpha: float | None = None) -> int:
-    """Return packed ABGR color from ColorPalette, optionally overriding alpha."""
-    c = ColorPalette.GetColor(name).copy()
-    if alpha is not None:
-        c = c.opacity(alpha)
-    return c.to_color()
-
-
-def _entry_color_name(key: str) -> str:
-    """Deterministically map an entry label to a palette color name."""
-    mapped = _ui_entry_color_map.get(key)
-    if mapped:
-        return mapped
-    names = _entry_palette_names()
-    if not names:
-        return "dodger_blue"
-    h = 0
-    for ch in key:
-        h = (h * 131 + ord(ch)) & 0xFFFFFFFF
-    return names[h % len(names)]
-
-
-def _entry_color32(key: str) -> int:
-    """Packed color for a grouped entry, consistent across widgets."""
-    return _c32(_entry_color_name(key))
-
-
-def _entry_color4(key: str) -> tuple[float, float, float, float]:
-    """Normalized color for a grouped entry, consistent across widgets."""
-    return _c4(_entry_color_name(key))
-
-
-def _color_luminance(color_name: str) -> float:
-    """Return perceptual luminance of a palette color (0..1)."""
-    c = ColorPalette.GetColor(color_name)
-    return (0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b) / 255.0
-
-
-def _contrast_text_color32(fill_color_name: str) -> int:
-    """Pick black/white text based on fill brightness."""
-    return _c32("black") if _color_luminance(fill_color_name) >= 0.60 else _c32("white")
-
-
-def _reroll_entry_palette() -> None:
-    """Randomize the full palette order again (uses every palette entry name)."""
-    global _ui_palette_order
-    _ui_palette_order = [n.lower() for n in ColorPalette.ListColors()]
-    random.shuffle(_ui_palette_order)
-
-
-def _log_color_pool_and_assignments(rows: list[dict] | None = None) -> None:
-    """Log all palette entries and current entry assignments (reuse diagnostics)."""
-    pool = _entry_palette_names()
-    print("=== Profiler UI Color Pool (full ColorPalette, randomized order) ===")
-    rgba_aliases: dict[tuple[int, int, int, int], list[str]] = {}
-    for i, name in enumerate(pool, start=1):
-        c = ColorPalette.GetColor(name)
-        rgba = c.to_tuple()
-        rgba_aliases.setdefault(rgba, []).append(name)
-        print(f"[{i:03d}] {name:<18} rgba={rgba} lum={_color_luminance(name):.3f}")
-
-    dup_alias_sets = [names for names in rgba_aliases.values() if len(names) > 1]
-    if dup_alias_sets:
-        print("=== Palette aliases sharing the same RGBA ===")
-        for names in dup_alias_sets:
-            print(" - " + ", ".join(names))
-
-    if rows is None:
-        return
-
-    print("=== Current Entry -> Color Assignment ===")
-    reverse: dict[str, list[str]] = {}
-    for row in rows:
-        display = str(row.get("display", ""))
-        if not display or display == "Others":
-            continue
-        color_name = _entry_color_name(display)
-        reverse.setdefault(color_name, []).append(display)
-        print(f"{display} -> {color_name}")
-
-    reused = {k: v for k, v in reverse.items() if len(v) > 1}
-    if reused:
-        print("=== Reused colors detected ===")
-        for color_name, displays in reused.items():
-            print(f"{color_name}: {', '.join(displays)}")
-    else:
-        print("No color reuse detected for visible entries.")
-
-
-def _refresh_entry_color_assignments(rows: list[dict]) -> None:
-    """Assign unique palette colors to visible rows before any reuse.
-
-    Colors are assigned in current row order (usually usage-descending), which
-    makes top consumers get the best visual distinction first.
-    """
-    global _ui_entry_color_map
-    pool = _entry_palette_names()
-    if not pool:
-        _ui_entry_color_map = {}
-        return
-    new_map: dict[str, str] = {}
-    pool_len = len(pool)
-    for idx, row in enumerate(rows):
-        display = str(row.get("display", ""))
-        if not display or display == "Others":
-            continue
-        # Unique until pool exhaustion, then wrap.
-        new_map[display] = pool[idx % pool_len]
-    _ui_entry_color_map = new_map
-
-
-def _phase_color_name(phase: str) -> str:
-    """Map profiler phase names to palette color names."""
-    mapping = {
-        "Draw": "dodger_blue",
-        "Main": "gold",
-        "Update": "light_green",
-    }
-    return mapping.get(phase, "light_gray")
-
-
-def _dominant_phase(row: dict) -> str:
-    """Return the phase with the highest avg usage for a grouped row."""
-    phase_stats = row.get("phase_stats", {})
-    best_phase = "Update"
-    best_avg = -1.0
-    for phase in ("Draw", "Main", "Update"):
-        avg = float(phase_stats.get(phase, {}).get("avg", 0.0))
-        if avg > best_avg:
-            best_avg = avg
-            best_phase = phase
-    return best_phase
-
-
-def _draw_top_usage_stacked_bar(rows: list[dict]) -> str | None:
-    """Draw a stacked 100% usage bar with an 'Others' bucket for tiny entries.
-
-    Returns:
-        The clicked entry display token, `__others__` for Others, or `None`.
-    """
-    if not rows:
-        return None
-
-    total_usage = sum(r["selected_stats"]["avg"] for r in rows)
-    if total_usage <= 0.0:
-        PyImGui.text("No usage totals available for stacked bar")
-        return None
-
-    avail_w, _avail_h = PyImGui.get_content_region_avail()
-    bar_w = max(220.0, avail_w)
-    bar_h = 22.0
-    start_x, start_y = PyImGui.get_cursor_screen_pos()
-
-    PyImGui.text_colored("Usage Share", _c4("light_blue"))
-    PyImGui.same_line(0, -1)
-    PyImGui.text(f"(100% of included avg totals, frame total {total_usage:.3f}ms)")
-    PyImGui.dummy(int(bar_w), int(bar_h))
-
-    bg = _c32("gw_disabled")
-    border = _c32("dark_gray")
-    PyImGui.draw_list_add_rect_filled(start_x, start_y + 16, start_x + bar_w, start_y + 16 + bar_h, bg, 0.0, 0)
-    PyImGui.draw_list_add_rect(start_x, start_y + 16, start_x + bar_w, start_y + 16 + bar_h, border, 0.0, 0, 1.5)
-
-    # Build visible segments and collapse too-small ones into Others.
-    min_px = 14.0
-    visible_segments = []
-    others_rows = []
-    for row in rows:
-        width_px = (row["selected_stats"]["avg"] / total_usage) * bar_w
-        if width_px < min_px:
-            others_rows.append(row)
-        else:
-            visible_segments.append(row)
-
-    if others_rows:
-        others_total = sum(r["selected_stats"]["avg"] for r in others_rows)
-        visible_segments.append(
-            {
-                "display": "Others",
-                "selected_stats": {"avg": others_total},
-                "members": [m for r in others_rows for m in r["members"]],
-                "_others_rows": others_rows,
-            }
-        )
-
-    clicked_entry: str | None = None
-    offset = 0.0
-    inner_y1 = start_y + 17
-    inner_y2 = start_y + 16 + bar_h - 1
-
-    for idx, row in enumerate(visible_segments):
-        share = row["selected_stats"]["avg"] / total_usage
-        seg_w = (bar_w - offset) if idx == len(visible_segments) - 1 else max(1.0, share * bar_w)
-        x1 = start_x + offset
-        x2 = start_x + offset + seg_w
-        offset += seg_w
-
-        color_name = _entry_color_name(row["display"]) if row["display"] != "Others" else "dark_gray"
-        color = _c32(color_name)
-        PyImGui.draw_list_add_rect_filled(x1, inner_y1, x2, inner_y2, color, 0.0, 0)
-        PyImGui.draw_list_add_rect(x1, inner_y1, x2, inner_y2, border, 0.0, 0, 1.0)
-
-        if seg_w > 60:
-            label = row["display"]
-            if len(label) > 18:
-                label = label[:15] + "..."
-            PyImGui.draw_list_add_text(x1 + 3, inner_y1 + 2, _contrast_text_color32(color_name), label)
-
-        PyImGui.set_cursor_screen_pos(x1, inner_y1)
-        if PyImGui.invisible_button(f"##usage_stack_{idx}", seg_w, max(1.0, inner_y2 - inner_y1)):
-            clicked_entry = "__others__" if row["display"] == "Others" else row["display"]
-        if PyImGui.is_item_hovered() and PyImGui.begin_tooltip():
-            pct = share * 100.0
-            PyImGui.text_colored(row["display"], _c4("gold"))
-            PyImGui.text(f"Included total avg: {row['selected_stats']['avg']:.3f}ms")
-            PyImGui.text(f"Usage share: {pct:.1f}%")
-            if row["display"] == "Others":
-                subrows = row.get("_others_rows", [])
-                PyImGui.separator()
-                PyImGui.text(f"Collapsed entries: {len(subrows)}")
-                for sub in subrows[:10]:
-                    PyImGui.text(f"  {sub['display']} ({sub['selected_stats']['avg']:.3f}ms)")
-            PyImGui.end_tooltip()
-
-    PyImGui.spacing()
-    return clicked_entry
-
-
-def _draw_usage_groups(rows: list[dict]) -> str | None:
-    """Draw aggregated usage rows grouped by normalized display token.
-
-    Returns:
-        The clicked entry display token, or `None` when no row was clicked.
-    """
-    clicked_entry: str | None = None
-    total_usage = sum(row["selected_stats"]["avg"] for row in rows)
-    flags = int(PyImGui.TableFlags.Borders | PyImGui.TableFlags.RowBg | PyImGui.TableFlags.SizingStretchProp)
-    if not PyImGui.begin_table("prof_usage_groups", 5, flags):
-        return None
-
-    PyImGui.table_setup_column("Entry", PyImGui.TableColumnFlags.WidthStretch)
-    PyImGui.table_setup_column("Total", PyImGui.TableColumnFlags.WidthFixed, 100)
-    PyImGui.table_setup_column("% Usage", PyImGui.TableColumnFlags.WidthFixed, 70)
-    PyImGui.table_setup_column("Usage Bar", PyImGui.TableColumnFlags.WidthFixed, 140)
-    PyImGui.table_setup_column("Members", PyImGui.TableColumnFlags.WidthFixed, 60)
-    PyImGui.table_headers_row()
-
-    for row in rows[:_ui_max_rows]:
-        pct = (row["selected_stats"]["avg"] / total_usage) if total_usage > 0.0 else 0.0
-        PyImGui.table_next_row()
-        PyImGui.table_set_column_index(0)
-        if PyImGui.selectable(
-            f"{row['display']}##usage_row",
-            _ui_selected_entry == row["display"],
-            PyImGui.SelectableFlags.NoFlag,
-            (0.0, 0.0),
-        ):
-            clicked_entry = row["display"]
-        if PyImGui.is_item_hovered() and PyImGui.begin_tooltip():
-            PyImGui.text_colored(row["display"], _c4("gold"))
-            PyImGui.text(f"Included total avg: {row['selected_stats']['avg']:.3f}ms")
-            PyImGui.text(f"Usage share: {pct * 100:.1f}%")
-            PyImGui.separator()
-            PyImGui.text(f"Subjects: {', '.join(row['subjects'][:6])}")
-            PyImGui.text(
-                f"Phase avgs: Draw={row['phase_stats']['Draw']['avg']:.3f} | "
-                f"Main={row['phase_stats']['Main']['avg']:.3f} | Update={row['phase_stats']['Update']['avg']:.3f}"
-            )
-            if row["script_paths"]:
-                PyImGui.text("Script paths:")
-                for sp in row["script_paths"][:6]:
-                    PyImGui.text(f"  {sp}")
-            PyImGui.separator()
-            PyImGui.text("Top members:")
-            for item in row["members"][:10]:
-                stats = _catalog.get_stats(item.raw_name)
-                if stats:
-                    PyImGui.text(
-                        f"  {item.phase}: avg={stats['avg']:.3f} p50={stats['p50']:.3f} "
-                        f"p95={stats['p95']:.3f} p99={stats['p99']:.3f} max={stats['max']:.3f}"
-                    )
-                PyImGui.text(f"    {item.raw_name}")
-            PyImGui.end_tooltip()
-
-        PyImGui.table_set_column_index(1)
-        PyImGui.text(f"{row['selected_stats']['avg']:.3f}")
-        PyImGui.table_set_column_index(2)
-        PyImGui.text(f"{pct * 100:.1f}%")
-        PyImGui.table_set_column_index(3)
-        PyImGui.push_style_color(PyImGui.ImGuiCol.PlotHistogram, _entry_color4(row["display"]))
-        PyImGui.push_style_color(PyImGui.ImGuiCol.FrameBg, _c4("gw_disabled"))
-        PyImGui.progress_bar(pct, -1, 0, "")
-        PyImGui.pop_style_color(2)
-        PyImGui.table_set_column_index(4)
-        PyImGui.text(str(len(row["members"])))
-
-    PyImGui.end_table()
-    return clicked_entry
-
-
-def _draw_usage_group_details(rows: list[dict], selected_display: str) -> None:
-    """Draw a styled detail card for the selected usage row."""
-    row = next((r for r in rows if r["display"] == selected_display), None)
-    if row is None:
-        return
-
-    if not PyImGui.begin_child("SelectedUsageCard", (0, 0), True):
-        return
-    accent = _entry_color4(row["display"])
-    PyImGui.text_colored("Selected Entry", _c4("light_blue"))
-    PyImGui.same_line(0, -1)
-    PyImGui.text_colored(row["display"], accent)
-    PyImGui.separator()
-
-    PyImGui.text(f"Included Avg Total: {row['selected_stats']['avg']:.3f}ms")
-    PyImGui.text(f"Members: {len(row['members'])}")
-    PyImGui.text(f"Subjects: {', '.join(row['subjects'][:6])}")
-
-    if row["script_paths"]:
-        PyImGui.text("Script Paths:")
-        for sp in row["script_paths"]:
-            PyImGui.text(f"  {sp}")
-
-    total_avg = max(0.0, float(row["selected_stats"]["avg"]))
-    if total_avg > 0.0:
-        PyImGui.spacing()
-        PyImGui.text_colored("Phase Contribution", _c4("light_blue"))
-        for phase_name in ("Draw", "Main", "Update"):
-            phase_avg = float(row["phase_stats"][phase_name]["avg"])
-            frac = phase_avg / total_avg if total_avg > 0.0 else 0.0
-            PyImGui.text_colored(f"{phase_name}", _c4(_phase_color_name(phase_name)))
-            PyImGui.same_line(0, -1)
-            PyImGui.text(f"{phase_avg:.3f}ms ({frac * 100:.1f}%)")
-            PyImGui.push_style_color(PyImGui.ImGuiCol.PlotHistogram, _c4(_phase_color_name(phase_name)))
-            PyImGui.push_style_color(PyImGui.ImGuiCol.FrameBg, _c4("gw_disabled"))
-            PyImGui.progress_bar(frac, -1, 0, "")
-            PyImGui.pop_style_color(2)
-
-    PyImGui.spacing()
-    if PyImGui.collapsing_header("Metric History (Top Members)", PyImGui.TreeNodeFlags.DefaultOpen):
-        for item in row["members"][: min(6, max(3, _ui_max_rows // 4))]:
-            stats = _catalog.get_stats(item.raw_name)
-            if not stats:
-                continue
-            hist = _catalog.get_history(item.raw_name)
-            PyImGui.text_colored(f"{item.phase} | {item.raw_name}", _c4(_phase_color_name(item.phase)))
-            if hist:
-                _draw_sparkline(
-                    f"hist##{item.raw_name}",
-                    hist,
-                    width=0.0,
-                    height=48.0,
-                    line_col=_entry_color32(row["display"]),
-                    fill_col=_c32(_entry_color_name(row["display"]), 0.18),
-                )
-                PyImGui.text(
-                    f"n={len(hist)}  min={min(hist):.3f}  max={max(hist):.3f}  latest={hist[-1]:.3f}"
-                )
-            else:
-                PyImGui.text("No history samples available")
-            PyImGui.spacing()
-
-    PyImGui.spacing()
-    flags = int(PyImGui.TableFlags.Borders | PyImGui.TableFlags.RowBg | PyImGui.TableFlags.SizingStretchProp)
-    if not PyImGui.begin_table(f"usage_group_phase_summary##{selected_display}", 7, flags):
-        PyImGui.end_child()
-        return
-
-    PyImGui.table_setup_column("Phase", PyImGui.TableColumnFlags.WidthFixed, 70)
-    PyImGui.table_setup_column("Min Sum", PyImGui.TableColumnFlags.WidthFixed, 70)
-    PyImGui.table_setup_column("Avg Sum", PyImGui.TableColumnFlags.WidthFixed, 70)
-    PyImGui.table_setup_column("P50 Sum", PyImGui.TableColumnFlags.WidthFixed, 70)
-    PyImGui.table_setup_column("P95 Sum", PyImGui.TableColumnFlags.WidthFixed, 70)
-    PyImGui.table_setup_column("P99 Sum", PyImGui.TableColumnFlags.WidthFixed, 70)
-    PyImGui.table_setup_column("Max Sum", PyImGui.TableColumnFlags.WidthFixed, 70)
-    PyImGui.table_headers_row()
-
-    for phase_name in ("Draw", "Main", "Update"):
-        phase_stats = row["phase_stats"][phase_name]
-        PyImGui.table_next_row()
-        PyImGui.table_set_column_index(0)
-        PyImGui.text_colored(phase_name, _c4(_phase_color_name(phase_name)))
-        PyImGui.table_set_column_index(1)
-        PyImGui.text(f"{phase_stats['min']:.3f}")
-        PyImGui.table_set_column_index(2)
-        PyImGui.text(f"{phase_stats['avg']:.3f}")
-        PyImGui.table_set_column_index(3)
-        PyImGui.text(f"{phase_stats['p50']:.3f}")
-        PyImGui.table_set_column_index(4)
-        PyImGui.text(f"{phase_stats['p95']:.3f}")
-        PyImGui.table_set_column_index(5)
-        PyImGui.text(f"{phase_stats['p99']:.3f}")
-        PyImGui.table_set_column_index(6)
-        PyImGui.text(f"{phase_stats['max']:.3f}")
-
-    PyImGui.end_table()
-    PyImGui.spacing()
-
-    if PyImGui.collapsing_header(f"Member Metrics ({len(row['members'])})", PyImGui.TreeNodeFlags.DefaultOpen):
-        if PyImGui.begin_table(f"usage_group_members##{selected_display}", 9, flags):
-            PyImGui.table_setup_column("Phase", PyImGui.TableColumnFlags.WidthFixed, 70)
-            PyImGui.table_setup_column("Min", PyImGui.TableColumnFlags.WidthFixed, 70)
-            PyImGui.table_setup_column("Avg", PyImGui.TableColumnFlags.WidthFixed, 70)
-            PyImGui.table_setup_column("P50", PyImGui.TableColumnFlags.WidthFixed, 70)
-            PyImGui.table_setup_column("P95", PyImGui.TableColumnFlags.WidthFixed, 70)
-            PyImGui.table_setup_column("P99", PyImGui.TableColumnFlags.WidthFixed, 70)
-            PyImGui.table_setup_column("Max", PyImGui.TableColumnFlags.WidthFixed, 70)
-            PyImGui.table_setup_column("Operation", PyImGui.TableColumnFlags.WidthFixed, 150)
-            PyImGui.table_setup_column("Raw Name", PyImGui.TableColumnFlags.WidthStretch)
-            PyImGui.table_headers_row()
-
-            for item in row["members"][:max(15, _ui_max_rows)]:
-                stats = _catalog.get_stats(item.raw_name)
-                if not stats:
-                    continue
-                PyImGui.table_next_row()
-                PyImGui.table_set_column_index(0)
-                PyImGui.text_colored(item.phase, _c4(_phase_color_name(item.phase)))
-                PyImGui.table_set_column_index(1)
-                PyImGui.text(f"{stats['min']:.3f}")
-                PyImGui.table_set_column_index(2)
-                PyImGui.text(f"{stats['avg']:.3f}")
-                PyImGui.table_set_column_index(3)
-                PyImGui.text(f"{stats['p50']:.3f}")
-                PyImGui.table_set_column_index(4)
-                PyImGui.text(f"{stats['p95']:.3f}")
-                PyImGui.table_set_column_index(5)
-                PyImGui.text(f"{stats['p99']:.3f}")
-                PyImGui.table_set_column_index(6)
-                PyImGui.text(f"{stats['max']:.3f}")
-                PyImGui.table_set_column_index(7)
-                PyImGui.text(item.operation_token)
-                PyImGui.table_set_column_index(8)
-                PyImGui.text(item.raw_name)
-            PyImGui.end_table()
-    PyImGui.end_child()
-
-
-def _draw_sparkline(
-    id_str: str,
-    values: list[float],
-    width: float = 0.0,
-    height: float = 42.0,
-    line_col: int | None = None,
-    fill_col: int | None = None,
-) -> None:
-    """Draw a simple sparkline/area chart using draw-list primitives."""
-    avail_w, _ = PyImGui.get_content_region_avail()
-    w = max(120.0, avail_w if width <= 0 else width)
-    h = max(16.0, height)
-    x, y = PyImGui.get_cursor_screen_pos()
-    PyImGui.invisible_button(id_str, w, h)
-
-    draw_bg = _c32("gw_disabled")
-    draw_border = _c32("slate_gray")
-    draw_line = line_col if line_col is not None else _c32("dodger_blue")
-    draw_fill = fill_col if fill_col is not None else _c32("dark_blue", 0.22)
-
-    PyImGui.draw_list_add_rect_filled(x, y, x + w, y + h, draw_bg, 0.0, 0)
-    PyImGui.draw_list_add_rect(x, y, x + w, y + h, draw_border, 0.0, 0, 1.0)
-
-    if not values:
-        return
-    if len(values) == 1:
-        yy = y + h * 0.5
-        PyImGui.draw_list_add_line(x + 2, yy, x + w - 2, yy, draw_line, 2.0)
-        return
-
-    vmin = min(values)
-    vmax = max(values)
-    vrange = (vmax - vmin) if vmax > vmin else 1.0
-    inner_pad = 2.0
-    px_prev = x + inner_pad
-    py_prev = y + h - inner_pad - (((values[0] - vmin) / vrange) * (h - inner_pad * 2))
-    for i in range(1, len(values)):
-        t = i / (len(values) - 1)
-        px = x + inner_pad + t * (w - inner_pad * 2)
-        py = y + h - inner_pad - (((values[i] - vmin) / vrange) * (h - inner_pad * 2))
-        PyImGui.draw_list_add_line(px_prev, py_prev, px, py, draw_line, 1.5)
-        PyImGui.draw_list_add_line(px, py, px, y + h - inner_pad, draw_fill, 1.0)
-        px_prev, py_prev = px, py
-
-    # Time segmentation overlay (seconds) for easier visual grouping.
-    total_seconds = (len(values) - 1) * _history_seconds_per_sample
-    if total_seconds >= _history_tick_seconds:
-        plot_w = max(1.0, w - inner_pad * 2)
-        tick_seconds = _history_tick_seconds
-        max_ticks = max(2, int(plot_w / 70.0))
-        tick_count = int(total_seconds / tick_seconds)
-        if tick_count > max_ticks:
-            tick_seconds *= int((tick_count + max_ticks - 1) / max_ticks)
-
-        tick_color = _c32("slate_gray", 0.45)
-        label_color = _c32("light_gray", 0.70)
-        tick_time = 0.0
-        while tick_time <= total_seconds + 1e-6:
-            ratio = tick_time / total_seconds
-            px = x + inner_pad + ratio * plot_w
-            PyImGui.draw_list_add_line(px, y + 1.0, px, y + h - 1.0, tick_color, 1.0)
-            label = f"{int(round(total_seconds - tick_time))}s"
-            text_w, _ = PyImGui.calc_text_size(label)
-            tx = max(x + 1.0, min(px - text_w * 0.5, x + w - text_w - 1.0))
-            PyImGui.draw_list_add_text(tx, y + h - 12.0, label_color, label)
-            tick_time += tick_seconds
-
-    if PyImGui.is_item_hovered() and PyImGui.begin_tooltip():
-        PyImGui.text(f"Samples: {len(values)}")
-        PyImGui.text(f"Min: {vmin:.3f}ms")
-        PyImGui.text(f"Max: {vmax:.3f}ms")
-        PyImGui.text(f"Latest: {values[-1]:.3f}ms")
-        PyImGui.end_tooltip()
-
-
-def _draw_selected_entry_window(rows: list[dict]) -> None:
-    """Render selected entry details in a separate window to reduce main-view clutter."""
-    global _ui_show_selected_window, _ui_selected_entry
-    if not _ui_selected_entry:
-        return
-
-    PyImGui.set_next_window_size((900, 560), PyImGui.ImGuiCond.FirstUseEver)
-    PyImGui.push_style_color(PyImGui.ImGuiCol.WindowBg, _c4("black", 0.92))
-    PyImGui.push_style_color(PyImGui.ImGuiCol.ChildBg, _c4("dark_gray", 0.28))
-    PyImGui.push_style_color(PyImGui.ImGuiCol.Border, _c4("slate_gray", 0.9))
-    PyImGui.push_style_color(PyImGui.ImGuiCol.Header, _c4("dark_blue", 0.75))
-    PyImGui.push_style_color(PyImGui.ImGuiCol.HeaderHovered, _c4("dodger_blue", 0.65))
-    PyImGui.push_style_color(PyImGui.ImGuiCol.HeaderActive, _c4("dodger_blue", 0.85))
-    PyImGui.push_style_color(PyImGui.ImGuiCol.TableHeaderBg, _c4("midnight_violet", 0.55))
-    detail_flags = int(PyImGui.WindowFlags.AlwaysAutoResize)
-   
-
-    if not PyImGui.begin("Profiler Entry Details", detail_flags):
-        PyImGui.pop_style_color(7)
-        PyImGui.end()
-        return
-
-    _ui_show_selected_window = PyImGui.checkbox("Show details window", _ui_show_selected_window)
-    PyImGui.same_line(0, -1)
-    if PyImGui.button("Clear Selection"):
-        _ui_selected_entry = ""
-        PyImGui.pop_style_color(7)
-        PyImGui.end()
-        return
-
-    PyImGui.spacing()
-    _draw_usage_group_details(rows, _ui_selected_entry)
-    PyImGui.pop_style_color(7)
-    PyImGui.end()
-
-
-def draw() -> None:
-    """Optional UI viewer for the parsed catalog.
-
-    This viewer is intentionally lightweight. The catalog class remains the
-    reusable core; this function only visualizes the already-processed data.
-    """
-    global _ui_filter_text, _ui_show_details, _ui_max_rows, _ui_selected_entry
-    global _ui_include_draw, _ui_include_main, _ui_include_update, _ui_show_selected_window
-
-    if PyImGui is None:
-        return
-
-    _ensure_loaded()
-    _auto_refresh_if_needed()
-
-    PyImGui.set_next_window_size((900, 900), PyImGui.ImGuiCond.FirstUseEver)
-    if not PyImGui.begin("Profiler Name Catalog"):
-        PyImGui.end()
-        return
-
-    if PyImGui.button("Refresh Live Metrics"):
-        _catalog.refresh_from_live()
-    PyImGui.same_line(0, -1)
-    if PyImGui.button("Re-roll Colors"):
-        _reroll_entry_palette()
-    PyImGui.same_line(0, -1)
-    if PyImGui.button("Clear Stats Cache"):
-        _catalog.clear_usage_stats()
-    PyImGui.same_line(0, -1)
-    if PyImGui.button("Print Sample (30)"):
-        _catalog.print_sample(30)
-
-    _ui_show_details = PyImGui.checkbox("Verbose tooltips", _ui_show_details)
-    PyImGui.same_line(0, -1)
-    _ui_show_selected_window = PyImGui.checkbox("Details Window", _ui_show_selected_window)
-    _ui_filter_text = PyImGui.input_text("Filter", _ui_filter_text)
-    _ui_max_rows = PyImGui.slider_int("Max Rows", _ui_max_rows, 5, 200)
-    _ui_include_draw = PyImGui.checkbox("Include Draw", _ui_include_draw)
-    PyImGui.same_line(0, -1)
-    _ui_include_main = PyImGui.checkbox("Include Main", _ui_include_main)
-    PyImGui.same_line(0, -1)
-    _ui_include_update = PyImGui.checkbox("Include Update", _ui_include_update)
-
-    counts = _catalog.summary_counts()
-    PyImGui.text(
-        f"Items={counts['items']} | Phases={counts['phases']} | Subjects={counts['subjects']} | "
-        f"ScriptPaths={counts['script_paths']} | Ops={counts['operations']} | Stats={'yes' if _catalog.has_usage_stats() else 'no'}"
-    )
-
-    visible = _catalog.filter_text(_ui_filter_text)
-    PyImGui.text(f"Filtered rows: {len(visible)}")
-    selected_phases = set()
-    if _ui_include_draw:
-        selected_phases.add("Draw")
-    if _ui_include_main:
-        selected_phases.add("Main")
-    if _ui_include_update:
-        selected_phases.add("Update")
-
-    usage_rows = _catalog.build_usage_groups_by_display(visible, include_phases=selected_phases)
-    _refresh_entry_color_assignments(usage_rows)
-    if PyImGui.button("Log Colors"):
-        _log_color_pool_and_assignments(usage_rows)
-    PyImGui.same_line(0, -1)
-    if PyImGui.button("Print Usage Snapshot"):
-        _print_usage_rows_to_console(usage_rows, _ui_selected_entry)
-    PyImGui.same_line(0, -1)
-    if PyImGui.button("Print Selected Entry"):
-        _print_usage_rows_to_console(usage_rows, _ui_selected_entry, max_rows=0)
-    PyImGui.text(
-        "Grouped by normalized entry (display_token), sorted by included usage total. "
-        "Only source avg totals are shown here; percentiles remain in tooltip/details."
-    )
-    bar_clicked = _draw_top_usage_stacked_bar(usage_rows)
-    if bar_clicked is not None and bar_clicked != "__others__":
-        _ui_selected_entry = "" if _ui_selected_entry == bar_clicked else bar_clicked
-    clicked = _draw_usage_groups(usage_rows)
-    if clicked is not None:
-        _ui_selected_entry = "" if _ui_selected_entry == clicked else clicked
-    if _ui_selected_entry and not any(r["display"] == _ui_selected_entry for r in usage_rows):
-        _ui_selected_entry = ""
-
-    PyImGui.end()
-    if _ui_show_selected_window and _ui_selected_entry:
-        _draw_selected_entry_window(usage_rows)
+        avg = report[2]
+        total += avg
+        context = parts[0] if is_callback else ""
+        if context in phase_totals:
+            phase_totals[context] += avg
+        label = f"{parts[0]}.{parts[2]}" if is_callback else nm  # e.g. "Draw.Update"
+        metrics.append((label, avg, report[4], report[6]))
+        if avg > dominant_avg:
+            dominant_avg = avg
+            dominant_raw = nm
+    metrics.sort(key=lambda m: m[1], reverse=True)
+
+    _detail_metrics = metrics
+    _detail_total = total
+    _detail_phase_totals = phase_totals
+    _detail_spark_label = dominant_raw
+    hist = [float(v) for v in PyProfiler.get_history(dominant_raw)] if dominant_raw else []
+    # Native samples once per 6 frames, so the 600-sample buffer spans ~60s only at
+    # 60 fps (longer at lower fps). Trim to the last 60 s by the current cadence so
+    # the sparkline is always a 60-second window.
+    if system_info.fps > 0.0 and hist:
+        n60 = max(2, int(system_info.fps * 60.0 / 6.0))
+        hist = hist[-n60:]
+    _detail_history = hist
 
 
 def update() -> None:
-    """Refresh the shared catalog on a throttled interval (non-UI hook)."""
-    _ensure_loaded()
-    if update_throttle.IsExpired():
-        _catalog.refresh_from_live()
-        update_throttle.Reset()
+    global _prof_frames_left, system_info, initialized
+
+    # Deep-profile countdown (runs every tick, outside the usage throttle).
+    if _prof_active is not None:
+        _prof_frames_left -= 1
+        if _prof_frames_left <= 0:
+            _finish_profile()
+
+    if system_info.target_fps == 0:
+        system_info.target_fps = UIManager.GetFPSLimit()
+
+    if _usage_timer.IsExpired() or not initialized:
+        io = PyImGui.get_io()
+        fps = io.framerate
+        system_info.fps = fps
+        system_info.ms_per_frame = (1000.0 / fps) if fps > 0.0 else 0.0
+
+        system_info.widgets, system_info.ms_used = _refresh_usage()
+        _rebuild_bar_cache()
+        _usage_timer.Reset()
+        initialized = True
+
+
+def _fps_color(fps: float) -> tuple:
+    """Palette color for an fps reading (cached constants, no per-frame lookup).
+
+    green > 58 | yellow 55-58 | red 50-54 | dark red below 50.
+    """
+    if fps > 58.0:
+        return _COL_GREEN
+    if fps > 54.0:
+        return _COL_GOLD
+    if fps > 49.0:
+        return _COL_RED
+    return _COL_DARKRED
+
+
+def _total_time_color(pct: float) -> tuple:
+    """Palette color for the used-% figure (cached constants)."""
+    if pct <= 25.0:
+        return _COL_GREEN
+    if pct <= 50.0:
+        return _COL_GOLD
+    if pct <= 75.0:
+        return _COL_RED
+    return _COL_DARKRED
+
+
+def _draw_usage_bar(axis_max: float) -> str | None:
+    """A stacked horizontal share bar drawn with ImPlot (PlotBarGroups).
+
+    Segments come from the cached bar data (rebuilt once per data refresh), so this
+    only lays them out + hit-tests -- no per-frame grouping. `axis_max` sets the X
+    range: the whole-frame budget (leaves headroom) or the total widget time (fills
+    100%). Returns the widget name whose segment was clicked this frame (or None);
+    hovering a segment shows a tooltip.
+    """
+    labels = system_info.bar_labels
+    values = system_info.bar_values
+    if not labels or axis_max <= 0.0:
+        return None
+    implot = PyImGui.implot
+
+    clicked: str | None = None
+    # Decoration-free bar. Inputs stay enabled so hover works; the Cond_Always
+    # limits below re-lock the view every frame, so pan/zoom can't drift.
+    if implot.begin_plot("##usage_share", 340.0, 42.0, implot.Flags_CanvasOnly):
+        no_dec = implot.AxisFlags_NoDecorations
+        implot.setup_axes(None, None, no_dec, no_dec)
+        implot.setup_axis_limits(implot.X1, 0.0, axis_max, implot.Cond_Always)
+        implot.setup_axis_limits(implot.Y1, -0.5, 0.5, implot.Cond_Always)
+        spec = implot.make_spec(flags=implot.BarGroupsFlags_Stacked | implot.BarGroupsFlags_Horizontal)
+        implot.plot_bar_groups(labels, values, len(values), 1, 1.0, 0.0, spec)
+
+        # Capture each segment's colormap color, keyed by widget name, so the table
+        # rows can tint their progress bars with the same per-widget color. Queried
+        # inside the plot (same colormap the bar just used), so it matches exactly.
+        # Color proxies each colormap value (a list from the binding) into the
+        # codebase's Color type; to_tuple_normalized() then yields a real tuple,
+        # which push_style_color accepts (a raw list does not).
+        seg_colors: dict[str, Color] = {}
+        for idx, seg_lbl in enumerate(labels):
+            seg_colors[seg_lbl] = Color.from_tuple_normalized(implot.get_colormap_color(idx))
+        system_info.widget_colors = seg_colors
+
+        # Resolve the hovered segment from the mouse x (in plot coordinates).
+        if implot.is_plot_hovered():
+            mouse_x = implot.get_plot_mouse_pos().x
+            acc = 0.0
+            for lbl, val in zip(labels, values):
+                if acc <= mouse_x < acc + val:
+                    share = (val / axis_max * 100.0) if axis_max > 0.0 else 0.0
+                    PyImGui.set_tooltip(f"{lbl}\n{val:.3f} ms  ({share:.1f}%)")
+                    if PyImGui.is_mouse_clicked(0):
+                        clicked = lbl
+                    break
+                acc += val
+        implot.end_plot()
+    return clicked
+
+
+def _draw_sparkline(id_str: str, values: list[float], height: float, line_col: tuple) -> None:
+    """A filled ImPlot sparkline: a line over a shaded area, y-range pinned to data."""
+    if len(values) < 2:
+        return
+    implot = PyImGui.implot
+    vmin = min(values)
+    vmax = max(values)
+    if vmax <= vmin:
+        vmax = vmin + 1e-6
+    pad = (vmax - vmin) * 0.1
+    if implot.begin_plot(id_str, -1.0, height, implot.Flags_CanvasOnly | implot.Flags_NoInputs):
+        no_dec = implot.AxisFlags_NoDecorations
+        implot.setup_axes(None, None, no_dec, no_dec)
+        implot.setup_axis_limits(implot.X1, 0.0, float(len(values) - 1), implot.Cond_Always)
+        implot.setup_axis_limits(implot.Y1, vmin - pad, vmax + pad, implot.Cond_Always)
+        implot.plot_shaded("##fill", values, vmin - pad, 1.0, 0.0,
+                           implot.make_spec(fill_col=line_col, fill_alpha=0.18))
+        implot.plot_line("##line", values, 1.0, 0.0,
+                         implot.make_spec(line_col=line_col, line_weight=1.6))
+        implot.end_plot()
+
+
+# ── deep profile: capture + ImPlot flame graph ────────────────────────────────
+
+def _func_display_name(filename: str, funcname: str) -> str:
+    if filename == '~':
+        return funcname
+    base = filename.rsplit('\\', 1)[-1].rsplit('/', 1)[-1]
+    if base.endswith('.py'):
+        base = base[:-3]
+    return f"{base}.{funcname}"
+
+
+def _start_profile(widget: str) -> None:
+    """Begin a cProfile capture of `widget`'s callbacks (update/draw/main).
+
+    Enables the ProfilingRegistry and registers one SimpleProfiler for each phase
+    key so the widget loop routes those callbacks through it. No-op with an error
+    message if the entry is not a real WidgetManager widget.
+    """
+    global _prof_active, _prof_target, _prof_frames_left, _prof_total
+    global _flame_widget, _flame_cells, _flame_error, _flame_zoom
+    _flame_zoom = None
+    if not ProfilingRegistry().is_registered(widget):
+        _flame_widget = widget
+        _flame_cells = []
+        _flame_error = "Not registered for profiling - no cProfile capture available."
+        return
+    reg = ProfilingRegistry()
+    prof = SimpleProfiler()
+    reg.enabled = True
+    for phase in _PROFILE_PHASES:
+        reg.cprofile_targets[f"{widget}:{phase}"] = prof  # type: ignore[assignment]
+    _prof_total = max(1, _profile_frames)
+    _prof_active = prof
+    _prof_target = widget
+    _prof_frames_left = _prof_total
+    _flame_error = ""
+
+
+def _finish_profile() -> None:
+    """Stop the capture and convert the SimpleProfiler data into flame-graph state."""
+    global _prof_active, _prof_frames_left, _flame_frames
+    global _flame_stats, _flame_names, _flame_callees, _flame_roots, _flame_widget, _flame_error
+
+    reg = ProfilingRegistry()
+    prof = _prof_active
+    wid = _prof_target
+    _prof_active = None
+    _prof_frames_left = 0
+    for phase in _PROFILE_PHASES:
+        reg.cprofile_targets.pop(f"{wid}:{phase}", None)
+    if not reg.cprofile_targets:
+        reg.enabled = False
+    if prof is None:
+        return
+
+    # stats: {key: [nc, self_ns, cum_ns]} -> all_stats[key] = (cc, nc, self, cum, callers)
+    all_stats: dict = {}
+    for key, (nc, self_ns, cum_ns) in prof.stats.items():
+        callers = {ck: tuple(cv) for ck, cv in prof.callers.get(key, {}).items()}
+        all_stats[key] = (nc, nc, self_ns, cum_ns, callers)
+
+    names: dict = {k: _func_display_name(k[0], k[2]) for k in all_stats}
+
+    # callees: parent -> [(callee, edge_cum, edge_count)] in first-seen call order
+    callees: dict = {}
+    children_set: set = set()
+    edge_seq = prof.edge_order
+    for func_key, (cc, nc, tt, ct, callers) in all_stats.items():
+        for caller_key, (edge_count, edge_cum) in callers.items():
+            callees.setdefault(caller_key, []).append((func_key, edge_cum, edge_count))
+            children_set.add(func_key)
+    for k in callees:
+        callees[k].sort(key=lambda c: edge_seq.get((k, c[0]), 0))
+
+    # roots = the widget's own top-level functions (promoted from infra/ghost parents)
+    _INFRA_BASES = {'Profiling.py', 'WidgetManager.py', 'traceback.py', 'System Monitor.py'}
+    w = WidgetHandler().widgets.get(wid)
+    widget_script = w.script_path.replace("/", "\\") if w else ""
+    seen_roots: set = set()
+    widget_roots: list = []
+
+    def _is_infra(k) -> bool:
+        if k[0] in ('~', '<string>'):
+            return True
+        base = k[0].rsplit('\\', 1)[-1].rsplit('/', 1)[-1]
+        return base in _INFRA_BASES
+
+    infra_parents = set(callees.keys()) - set(all_stats.keys())
+    for k in all_stats:
+        if _is_infra(k) and k in callees:
+            infra_parents.add(k)
+    for parent_key in infra_parents:
+        for callee_key, _edge_ct, _edge_n in callees[parent_key]:
+            if callee_key in seen_roots or _is_infra(callee_key):
+                continue
+            if callee_key[0].replace("/", "\\") == widget_script:
+                widget_roots.append((callee_key, all_stats[callee_key][3]))
+                seen_roots.add(callee_key)
+    for k in all_stats:
+        if k in children_set or k in seen_roots or _is_infra(k):
+            continue
+        widget_roots.append((k, all_stats[k][3]))
+        seen_roots.add(k)
+    widget_roots.sort(key=lambda r: r[1], reverse=True)
+
+    _flame_stats = all_stats
+    _flame_names = names
+    _flame_callees = callees
+    _flame_roots = widget_roots
+    _flame_widget = wid
+    _flame_frames = _prof_total
+    _flame_error = "" if widget_roots else "No call data captured (widget did not run a profiled phase)."
+    _build_flame_cells()
+
+
+def _build_flame_cells() -> None:
+    """Lay the captured call graph out as flame cells in normalized x (0..1) and
+    integer depth, honouring the current zoom. ImPlot maps these to pixels, so the
+    layout is resolution-independent (no pixel math, unlike the draw-list icicle)."""
+    global _flame_cells, _flame_depth
+    raw = _flame_stats
+    callees = _flame_callees
+    frames = _flame_frames
+
+    if _flame_zoom is not None and _flame_zoom in raw:
+        top = [(_flame_zoom, raw[_flame_zoom][3])]
+    else:
+        top = _flame_roots
+    total_ct = sum(ct for _, ct in top) or 1.0
+
+    cells: list = []
+    # level items: (key, x0, x1, edge_calls, parent_cidx, prev_sib_cidx)
+    current: list = []
+    x = 0.0
+    prev_sib = -1
+    for key, ct in top:
+        w = ct / total_ct
+        if w >= _FLAME_MIN_FRAC:
+            nc_root = raw[key][1] if key in raw else 0
+            current.append((key, x, x + w, nc_root, -1, prev_sib))
+            prev_sib = _flame_color_idx(key, -1, prev_sib)
+        x += w
+
+    max_depth = 0
+    for depth in range(_FLAME_MAX_DEPTH):
+        if not current:
+            break
+        max_depth = depth + 1
+        nxt: list = []
+        for key, x0, x1, edge_calls, parent_cidx, prev_sib_cidx in current:
+            entry = raw.get(key)
+            if entry is None:
+                continue
+            _cc, _nc, tt, ct, _callers = entry
+            cidx = _flame_color_idx(key, parent_cidx, prev_sib_cidx)
+            cells.append((key, x0, x1, depth, tt / frames / 1_000_000, ct / frames / 1_000_000, edge_calls, cidx))
+            kids = callees.get(key)
+            if not kids or ct <= 0:
+                continue
+            span = x1 - x0
+            cx = x0
+            child_prev_sib = -1
+            for callee_key, edge_ct, edge_n in kids:
+                cw = (edge_ct / ct) * span
+                if cw >= _FLAME_MIN_FRAC:
+                    nxt.append((callee_key, cx, cx + cw, edge_n, cidx, child_prev_sib))
+                    child_prev_sib = _flame_color_idx(callee_key, cidx, child_prev_sib)
+                cx += cw
+        current = nxt
+
+    _flame_cells = cells
+    _flame_depth = max_depth
+
+
+def _flame_color_idx(key, parent_idx: int, prev_sib_idx: int) -> int:
+    """Palette index for a cell, shifted so it avoids its parent's and previous
+    sibling's colors -- keeps adjacent cells distinguishable (as the original did)."""
+    n = len(_FLAME_PALETTE)
+    idx = hash(key) % n
+    avoid = {parent_idx, prev_sib_idx}
+    while idx in avoid:
+        idx = (idx + 1) % n
+    return idx
+
+
+def _print_flame_summary() -> None:
+    """Dump the captured profile to the console (parity with the original)."""
+    frames = _flame_frames
+    print(f"=== System Monitor: Deep Profile for {_flame_widget} ===")
+    print(f"FramesCaptured={frames} RootCount={len(_flame_roots)} Zoomed={'yes' if _flame_zoom is not None else 'no'}")
+    if _flame_roots:
+        print("Top roots by cumulative/frame:")
+        for root_key, ct in _flame_roots[:10]:
+            print(f"  - {_flame_names.get(root_key, str(root_key))}: cum={ct / frames / 1_000_000:.3f}ms/frame")
+    sorted_funcs = sorted(_flame_stats.items(), key=lambda it: it[1][3], reverse=True)
+    print("Top functions by cumulative/frame:")
+    for func_key, (_cc, nc, tt, ct, _callers) in sorted_funcs[:25]:
+        print(f"  - {_flame_names.get(func_key, str(func_key))}: "
+              f"self={tt / frames / 1_000_000:.3f}ms/frame cum={ct / frames / 1_000_000:.3f}ms/frame "
+              f"calls/frame={nc / frames:.2f}")
+
+
+def _draw_flame() -> None:
+    """Render the flame cells with ImPlot: filled rects + labels, hover tooltip
+    (self / cum / calls-per-frame), same-function highlight, click-to-zoom, zoom-out
+    and a console Print Summary -- the original icicle's feature set."""
+    global _flame_zoom, _flame_hovered
+    if not _flame_cells:
+        PyImGui.text("No call data captured.")
+        return
+    implot = PyImGui.implot
+    frames = _flame_frames
+    depth = max(_flame_depth, 1)
+    prev_hovered = _flame_hovered
+
+    # toolbar: zoom-out (when zoomed) + print summary + caption
+    if _flame_zoom is not None:
+        if PyImGui.small_button("Zoom Out"):
+            _flame_zoom = None
+            _build_flame_cells()
+        PyImGui.same_line(0, 8)
+    if PyImGui.small_button("Print Summary"):
+        _print_flame_summary()
+    PyImGui.same_line(0, 8)
+    PyImGui.text(f"{len(_flame_roots)} roots - {frames} frames - click to zoom")
+
+    height = min(640.0, max(70.0, depth * 32.0))
+    clicked_key = None
+    new_hovered = None
+    if implot.begin_plot("##flame", 600.0, height, implot.Flags_CanvasOnly | implot.Flags_NoLegend):
+        no_dec = implot.AxisFlags_NoDecorations
+        implot.setup_axes(None, None, no_dec, no_dec | implot.AxisFlags_Invert)
+        implot.setup_axis_limits(implot.X1, 0.0, 1.0, implot.Cond_Always)
+        implot.setup_axis_limits(implot.Y1, 0.0, float(depth), implot.Cond_Always)
+
+        for i, cell in enumerate(_flame_cells):
+            key, x0, x1, d, _self_ms, _cum_ms, _edge_calls, cidx = cell
+            is_hl = prev_hovered is not None and key == prev_hovered
+            spec = implot.make_spec(fill_col=_FLAME_PALETTE[cidx], fill_alpha=1.0 if is_hl else 0.95,
+                                    flags=implot.ItemFlags_NoLegend | implot.ItemFlags_NoFit)
+            implot.plot_shaded_between(f"##fc{i}", [float(x0), float(x1)],
+                                       [float(d), float(d)], [float(d) + 1.0, float(d) + 1.0], spec)
+            if is_hl:  # white outline on every cell of the hovered function
+                border = implot.make_spec(line_col=_FLAME_HL, line_weight=2.0,
+                                          flags=implot.LineFlags_Loop | implot.ItemFlags_NoLegend | implot.ItemFlags_NoFit)
+                implot.plot_line_xy(f"##hl{i}", [float(x0), float(x1), float(x1), float(x0)],
+                                    [float(d), float(d), float(d) + 1.0, float(d) + 1.0], border)
+            width = x1 - x0
+            if width > 0.05:
+                label = _flame_names.get(key, "?")
+                implot.plot_text(label[:int(width / 0.012)], (x0 + x1) * 0.5, d + 0.5)
+
+        if implot.is_plot_hovered():
+            mp = implot.get_plot_mouse_pos()
+            mx, my = mp.x, mp.y
+            for cell in _flame_cells:
+                key, x0, x1, d, self_ms, cum_ms, edge_calls, _cidx = cell
+                if x0 <= mx < x1 and d <= my < d + 1:
+                    new_hovered = key
+                    nc = _flame_stats[key][1] if key in _flame_stats else edge_calls
+                    tip = (f"{_flame_names.get(key, '?')}\n"
+                           f"self {self_ms:.3f} ms  |  cum {cum_ms:.3f} ms\n"
+                           f"{edge_calls / frames:.1f} calls/frame")
+                    if nc != edge_calls:
+                        tip += f"  ({nc / frames:.1f} from all callers)"
+                    PyImGui.set_tooltip(tip)
+                    if PyImGui.is_mouse_clicked(0):
+                        clicked_key = key
+                    break
+        implot.end_plot()
+
+    _flame_hovered = new_hovered
+    if clicked_key is not None:
+        _flame_zoom = clicked_key
+        _build_flame_cells()
+
+
+def _analyzable_reason(name: str) -> str:
+    """Return '' if the entry can be deep-profiled, else why not.
+
+    An entry is profilable only if its runner wraps the call through the profiling
+    registry (runcall_scope) and declared itself via ProfilingRegistry.register().
+    At startup that's the widgets; non-widget callbacks that add the same wrapper
+    register too. Native callbacks that don't register can't produce a call graph.
+    """
+    if not ProfilingRegistry().is_registered(name):
+        return "Not registered for profiling - no cProfile call graph available."
+    return ""
+
+
+def _frames_input() -> None:
+    """Compact input to set how many frames the next capture will process."""
+    global _profile_frames
+    PyImGui.set_next_item_width(80)
+    _profile_frames = min(5000, max(10, PyImGui.input_int("frames", _profile_frames, 10, 60, 0)))
+
+
+def _draw_widget_window() -> None:
+    """Shared detail popup for the selected widget: its per-phase metric breakdown.
+
+    Opened by clicking a bar segment or a table row (both set `selected_widget`).
+    The per-metric numbers come from a cache rebuilt only when the selection changes
+    or the detail throttle expires -- get_reports() is too heavy to call per frame.
+    Placeholder content -- swap for whatever the detail view should really show.
+    """
+    global selected_widget, _detail_widget
+    if not selected_widget:
+        return
+
+    PyImGui.set_next_window_size((460, 520), PyImGui.ImGuiCond.FirstUseEver)
+    flags = PyImGui.WindowFlags.NoCollapse | PyImGui.WindowFlags.AlwaysAutoResize
+    visible, still_open = PyImGui.begin_with_close(f"{selected_widget}##widget_detail", True, flags)
+    if not still_open:
+        selected_widget = ""
+
+    if visible:
+        if selected_widget != _detail_widget or _detail_timer.IsExpired():
+            _detail_widget = selected_widget
+            _rebuild_detail(selected_widget)
+            _detail_timer.Reset()
+
+        wcolor = system_info.widget_colors.get(selected_widget)
+        spark_col = wcolor.to_tuple_normalized() if wcolor is not None else _PHASE_COLORS["Draw"]
+
+        # summary line
+        of_frame = (_detail_total / system_info.ms_per_frame * 100.0) if system_info.ms_per_frame > 0.0 else 0.0
+        PyImGui.text(f"{_detail_total:.3f} ms / frame")
+        PyImGui.same_line(0, 8)
+        PyImGui.text(f"{of_frame:.1f}% of frame  |  {len(_detail_metrics)} metrics")
+        PyImGui.separator()
+        # ── history sparkline of the heaviest metric ──
+        PyImGui.text("HISTORY")
+        if len(_detail_history) >= 2:
+            sp = _detail_spark_label.split(".", 3)
+            spark_name = f"{sp[0]}.{sp[2]}" if len(sp) == 4 else _detail_spark_label
+            PyImGui.text(spark_name)
+            PyImGui.same_line(0, 8)
+            PyImGui.text(f"min {min(_detail_history):.3f} - max {max(_detail_history):.3f}")
+            _draw_sparkline("##spark", _detail_history, 58.0, spark_col)
+        else:
+            PyImGui.text("No history samples yet.")
+        PyImGui.spacing()
+        PyImGui.separator()
+
+        # ── full metrics table ──
+        PyImGui.text("METRICS")
+        flags = int(PyImGui.TableFlags.RowBg | PyImGui.TableFlags.Borders | PyImGui.TableFlags.SizingStretchProp)
+        if PyImGui.begin_table("widget_metrics", 4, flags):
+            PyImGui.table_setup_column("phase")
+            PyImGui.table_setup_column("avg")
+            PyImGui.table_setup_column("p95")
+            PyImGui.table_setup_column("max")
+            PyImGui.table_headers_row()
+            for label, avg, p95, mx in _detail_metrics:
+                PyImGui.table_next_row()
+                PyImGui.table_set_column_index(0)
+                PyImGui.text(label)
+                PyImGui.table_set_column_index(1)
+                PyImGui.text(f"{avg:.3f}")
+                PyImGui.table_set_column_index(2)
+                PyImGui.text(f"{p95:.3f}")
+                PyImGui.table_set_column_index(3)
+                PyImGui.text(f"{mx:.3f}")
+            PyImGui.end_table()
+        PyImGui.spacing()
+        PyImGui.separator()
+
+        # ── detailed profile: on-demand cProfile capture -> ImPlot flame graph ──
+        PyImGui.text("DETAILED PROFILE")
+        if _prof_active is not None and _prof_target == selected_widget:
+            done = _prof_total - _prof_frames_left
+            PyImGui.push_style_color(PyImGui.ImGuiCol.PlotHistogram, _PHASE_COLORS["Main"])
+            PyImGui.push_style_color(PyImGui.ImGuiCol.FrameBg, _TRACK_COLOR.to_tuple_normalized())
+            PyImGui.progress_bar(done / _prof_total if _prof_total else 0.0, -1.0, 0.0, f"capturing {done}/{_prof_total}")
+            PyImGui.pop_style_color(2)
+        elif _prof_active is not None:
+            PyImGui.text(f"Busy capturing {_prof_target}...")
+        elif _flame_widget == selected_widget and _flame_error:
+            PyImGui.text(_flame_error)
+            if PyImGui.button("Run Detailed Profile"):
+                _start_profile(selected_widget)
+            PyImGui.same_line(0, 8)
+            _frames_input()
+        elif _flame_widget == selected_widget and _flame_cells:
+            if PyImGui.button("Re-run"):
+                _start_profile(selected_widget)
+            PyImGui.same_line(0, 8)
+            _frames_input()
+            _draw_flame()
+        else:
+            reason = _analyzable_reason(selected_widget)
+            if reason:
+                PyImGui.text(reason)
+            else:
+                if PyImGui.button("Run Detailed Profile"):
+                    _start_profile(selected_widget)
+                PyImGui.same_line(0, 8)
+                _frames_input()
+
+    PyImGui.end()
+
+
+def tooltip() -> None:
+    """Hover tooltip shown by the widget manager / launchpad."""
+    PyImGui.begin_tooltip()
+    ImGui_Legacy.push_font("Regular", 20)
+    PyImGui.text_colored("System Monitor", Color(255, 200, 100, 255).to_tuple_normalized())
+    ImGui_Legacy.pop_font()
+    PyImGui.spacing()
+    PyImGui.separator()
+    PyImGui.text("Live per-widget frame cost: fps, frame time and usage share.")
+    PyImGui.text("Click an entry for a phase breakdown, 60s history and metrics.")
+    PyImGui.text("Run a detailed cProfile capture, rendered as an ImPlot flame graph.")
+    PyImGui.spacing()
+    PyImGui.end_tooltip()
+
+
+def draw() -> None:
+    global selected_view, selected_widget
+
+    if not PyImGui.begin("System Monitor", PyImGui.WindowFlags.AlwaysAutoResize):
+        PyImGui.end()
+        return
+
+    # ── header: current fps / target, whole-frame time, script time ──
+    PyImGui.text_colored(f"{system_info.fps:.0f} FPS", _fps_color(system_info.fps))
+    PyImGui.same_line()
+    target = system_info.target_fps
+    PyImGui.text_colored(f"/ {target if target > 0 else 'unlimited'}", _COL_DARKCYAN)
+    PyImGui.same_line()
+    PyImGui.text(f"| {system_info.ms_per_frame:.2f} ms/frame")
+    PyImGui.same_line()
+    used_pct = (system_info.ms_used / system_info.ms_per_frame * 100.0) if system_info.ms_per_frame > 0.0 else 0.0
+    PyImGui.text_colored(f"|  Used {system_info.ms_used:.2f} ms ({used_pct:.0f}%)", _total_time_color(used_pct))
+
+    PyImGui.separator()
+
+    # ── pick what the per-widget % means (the two modes you described) ──
+    #   0 = share of the whole frame  ->  widget_ms / frame_ms
+    #   1 = share of all widget work  ->  widget_ms / total widget_ms
+    selected_view = PyImGui.radio_button("% of frame", selected_view, 0)
+    PyImGui.same_line()
+    selected_view = PyImGui.radio_button("% of widget work", selected_view, 1)
+
+    denom = system_info.ms_per_frame if selected_view == 0 else system_info.ms_used
+
+    PyImGui.same_line()
+    if PyImGui.button("Reset Statistics"):
+        PyProfiler.reset()
+        system_info.widgets, system_info.ms_used = _refresh_usage()
+        _rebuild_bar_cache()
+
+    PyImGui.separator()
+
+    # ── usage share: a stacked bar, one colored segment per widget (ImPlot) ──
+    picked = _draw_usage_bar(denom)
+    PyImGui.same_line()
+    if PyImGui.button("Print Report"):
+        for name, ms in system_info.widgets:
+            pct = (ms / denom * 100.0) if denom > 0.0 else 0.0
+            print(f"{name}: {ms:.3f} ms ({pct:.1f}%)")
+            
+    PyImGui.spacing()
+
+    # ── top widgets by time this frame, with the chosen % ──
+    table_flags = int(PyImGui.TableFlags.RowBg | PyImGui.TableFlags.SizingFixedFit)
+    # NOTE: ImGui persists column layout in imgui.ini keyed by this table ID.
+    # If you reorder/rename columns and they still show the old layout, bump this
+    # ID string (or delete the table's entry from imgui.ini) to force a fresh read.
+    if PyImGui.begin_table("top_widgets_v2", 3, table_flags):
+        PyImGui.table_setup_column("widget")
+        PyImGui.table_setup_column("ms")
+        PyImGui.table_setup_column("%")
+        PyImGui.table_headers_row()
+
+        # Lighten the selected/hovered row -- the default Header color is nearly the
+        # same as the dark theme background, so selection was almost invisible.
+        PyImGui.push_style_color(PyImGui.ImGuiCol.Header, _SEL_HEADER)
+        PyImGui.push_style_color(PyImGui.ImGuiCol.HeaderHovered, _SEL_HEADER_HOVER)
+        for i, (name, ms) in enumerate(system_info.widgets[:15]):  # top 15
+            pct = (ms / denom * 100.0) if denom > 0.0 else 0.0
+            PyImGui.table_next_row()
+
+            # column 0 (widget) doubles as the whole-row click target
+            PyImGui.table_set_column_index(0)
+            if PyImGui.selectable(f"{name}##row{i}", selected_widget == name,
+                                  PyImGui.SelectableFlags.SpanAllColumns, (0.0, 0.0)):
+                picked = name
+
+            PyImGui.table_set_column_index(1)
+            PyImGui.text(f"{ms:.3f}")
+
+            # column 2 (%): a progress bar tinted with THIS widget's stacked-bar
+            # color, so the bar and the table share one color per widget. Rows past
+            # the bar's top-10 fall into "others" and share that segment's color.
+            # A fixed width is required -- AlwaysAutoResize collapses a -1 bar to 0.
+            PyImGui.table_set_column_index(2)
+            row_color = system_info.widget_colors.get(name)
+            if row_color is None:
+                row_color = system_info.widget_colors.get("others", _TRACK_COLOR)
+            PyImGui.push_style_color(PyImGui.ImGuiCol.PlotHistogram, row_color.to_tuple_normalized())
+            PyImGui.push_style_color(PyImGui.ImGuiCol.FrameBg, _TRACK_COLOR.to_tuple_normalized())
+            PyImGui.progress_bar(min(pct / 100.0, 1.0), 90.0, 0.0, f"{pct:.0f}%")
+            PyImGui.pop_style_color(2)
+        PyImGui.pop_style_color(2)  # Header / HeaderHovered pushed before the loop
+        PyImGui.end_table()
+
+    # A click on a real segment or row toggles the shared detail window.
+    if picked is not None and picked != "others":
+        selected_widget = "" if selected_widget == picked else picked
+
+    PyImGui.end()
+
+    # Shared per-widget detail window (only while a widget is selected).
+    _draw_widget_window()
+
 
 if __name__ == "__main__":
     update()

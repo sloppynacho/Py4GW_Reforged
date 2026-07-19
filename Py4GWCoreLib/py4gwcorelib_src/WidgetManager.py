@@ -521,7 +521,14 @@ class Widget:
                 priority=99,
                 context=PyCallback.Context.Main
             )
-        
+
+        # Declare this widget as profilable: its callbacks run through the
+        # profiling wrapper above, so ProfilingRegistry consumers can tell it can
+        # be deep-profiled without assuming widget identity. Non-widget callbacks
+        # that add the same wrapper should register their name the same way.
+        if self.update_callback_id or self.draw_callback_id or self.main_callback_id:
+            _get_profiling().register(self.folder_script_name)
+
     def disable(self):
         """Disable the widget"""
         self.PauseCallbacks()
